@@ -9,6 +9,7 @@ Self-check: python3 detect.py --test
 
 import hashlib
 import json
+import os
 import random
 import re
 import string
@@ -73,8 +74,124 @@ def _name_before(text, start):
     return m.group(1) if m else None
 
 
+CONFIG_PATH = os.path.expanduser("~/.config/no-leaky/config.json")
+CACHE_PATH = os.path.expanduser("~/.cache/no-leaky/known.json")
+DEFAULT_CONFIG = {"scan_roots": [], "extra_credential_globs": [], "safe_paths": [], "ignore": []}
+HOME_SOURCES = [".npmrc", ".aws/credentials", ".config/gh/hosts.yml", ".docker/config.json"]
+SKIP_DIRS = {"node_modules", ".git", "vendor", ".venv", "venv", "__pycache__"}
+TOKEN = re.compile(r"[A-Za-z0-9_\-./+=:@!#$%^&*~]{16,}")
+
+
+def load_config(path=CONFIG_PATH):
+    cfg = dict(DEFAULT_CONFIG)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        cfg.update({k: v for k, v in data.items() if k in DEFAULT_CONFIG})
+    except FileNotFoundError:
+        pass
+    except (ValueError, OSError, AttributeError):
+        sys.stderr.write(f"no-leaky: ignoring unreadable config {path}\n")
+    return cfg
+
+
+def known_sources(cfg, home=None):
+    home = home or os.path.expanduser("~")
+    roots = cfg.get("scan_roots") or [os.getcwd()] + [os.path.join(home, d) for d in ("project", "code", "src")]
+    found = []
+    for root in roots:
+        root = os.path.expanduser(root)
+        base = root.rstrip(os.sep).count(os.sep)
+        for dirpath, dirnames, filenames in os.walk(root):
+            if dirpath.count(os.sep) - base >= 4:
+                dirnames[:] = []
+            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+            for name in filenames:
+                path = os.path.join(dirpath, name)
+                if (name == ".env" or name.startswith(".env.")) and not is_fixture_path(path):
+                    found.append(path)
+    found += [p for p in (os.path.join(home, s) for s in HOME_SOURCES) if os.path.isfile(p)]
+    return sorted(set(found))
+
+
+def _source_values(path):
+    """{sha256 hex: variable name} for the secret-looking values in one source file."""
+    out = {}
+    try:
+        with open(path, errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        line = re.sub(r"^\s*export\s+", "", line).strip()
+        seps = [i for i in (line.find("="), line.find(": ")) if i > 0]
+        if line.startswith("#") or not seps:
+            continue
+        cut = min(seps)
+        name = line[:cut].strip().strip("\"'")
+        val = line[cut + 1:].strip().rstrip(",").strip().strip("\"'")
+        if not val:
+            continue
+        if (len(val) < 16 or is_placeholder(val) or PUBLIC_NAME.search(name) or val[0] in "/~$"
+                or val.isdigit() or DOTTED.match(val) or WORDS.match(val)
+                or ("://" in val and not re.search(r"://[^/@\s]+:[^/@\s]+@", val))):
+            continue
+        out[hashlib.sha256(val.encode()).hexdigest()] = name.rsplit("/", 1)[-1].lstrip(":")
+    return out
+
+
+def load_known(cfg, cache=CACHE_PATH, home=None):
+    """{sha256 hex: variable name} of values on this machine. The cache holds hashes only."""
+    try:
+        with open(cache) as f:
+            stored = json.load(f)
+    except (OSError, ValueError):
+        stored = {}
+    fresh, changed = {}, False
+    for path in known_sources(cfg, home):
+        try:
+            mtime = os.stat(path).st_mtime
+        except OSError:
+            continue
+        entry = stored.get(path)
+        if not entry or entry.get("mtime") != mtime:
+            entry, changed = {"mtime": mtime, "values": _source_values(path)}, True
+        fresh[path] = entry
+    if changed or set(fresh) != set(stored):
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        tmp = cache + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(fresh, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, cache)
+    known = {}
+    for entry in fresh.values():
+        known.update(entry["values"])
+    return known
+
+
+def _candidates(token):
+    """(offset, text) pieces of a token that could be a whole known value."""
+    pieces = [(0, token)] + [(m.start(), m.group()) for m in re.finditer(r"[^@/]+", token)]
+    for off, piece in pieces:
+        yield off, piece
+        for i, c in enumerate(piece):
+            if c in "=:":
+                yield off + i + 1, piece[i + 1:]
+
+
 def find(text, known=frozenset()):
     cands = []  # (start, end, kind, tier, name, order)
+    if known:
+        for m in TOKEN.finditer(text):
+            for off, piece in _candidates(m.group()):
+                if len(piece) >= 16:
+                    h = hashlib.sha256(piece.encode("utf-8", "surrogatepass")).hexdigest()
+                    if h in known:
+                        s = m.start() + off
+                        name = known.get(h) if isinstance(known, dict) else None
+                        cands.append((s, s + len(piece), "known", "certain", name, len(VENDOR) + 1))
     for order, (kind, tier, rx, group) in enumerate(VENDOR):
         for m in rx.finditer(text):
             s, e = m.span(group)
@@ -250,10 +367,87 @@ def test():
     check("not fixture", not is_fixture_path("/repo/app/.env"))
     check("fp shape", len(fingerprint("x")) == 8 and all(c in "0123456789abcdef" for c in fingerprint("x")))
 
+    test_known(check)
+
     if bad:
         print("WRONG:", *bad, sep="\n  ")
         sys.exit(1)
     print("ok: detect self-check passed")
+
+
+def test_known(check):
+    import tempfile
+    import time
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.join(tmp, "proj")
+        os.makedirs(os.path.join(root, "app"))
+        os.makedirs(os.path.join(root, "node_modules", "x"))
+        home = os.path.join(tmp, "home")
+        os.makedirs(home)
+        value, short, example, nested = rand(24), rand(8), rand(24), rand(24)
+        env = os.path.join(root, "app", ".env")
+        with open(env, "w") as f:
+            f.write(f"MY_VAR={value}\nSHORT={short}\nAPP_URL=https://app.acmecorp.io/path/to\n"
+                    f"DB_HOST=db.internal.acmecorp\nNEXT_PUBLIC_KEY={rand(24)}\nexport QUOTED=\"{nested}\"\n")
+        with open(os.path.join(root, "app", ".env.example"), "w") as f:
+            f.write(f"EX_VAR={example}\n")
+        with open(os.path.join(root, "node_modules", "x", ".env"), "w") as f:
+            f.write(f"DEP_VAR={rand(24)}\n")
+        npmrc_value = rand(36)
+        with open(os.path.join(home, ".npmrc"), "w") as f:
+            f.write(f"//registry.npmjs.org/:_authToken={npmrc_value}\n")
+        cfg = dict(DEFAULT_CONFIG, scan_roots=[root])
+        cache = os.path.join(tmp, "cache", "known.json")
+
+        srcs = known_sources(cfg, home=home)
+        check("sources: env found", env in srcs)
+        check("sources: example skipped", not any(p.endswith(".env.example") for p in srcs))
+        check("sources: node_modules skipped", not any("node_modules" in p for p in srcs))
+        check("sources: npmrc found", os.path.join(home, ".npmrc") in srcs)
+
+        known = load_known(cfg, cache=cache, home=home)
+        h = hashlib.sha256(value.encode()).hexdigest()
+        check("known: value", known.get(h) == "MY_VAR")
+        check("known: quoted export", hashlib.sha256(nested.encode()).hexdigest() in known)
+        check("known: npmrc", hashlib.sha256(npmrc_value.encode()).hexdigest() in known)
+        check("known: short skipped", hashlib.sha256(short.encode()).hexdigest() not in known)
+        check("known: example skipped", hashlib.sha256(example.encode()).hexdigest() not in known)
+        check("known: only real values", len(known) == 3)
+        with open(cache) as f:
+            blob = f.read()
+        check("cache: no value", value not in blob and npmrc_value not in blob)
+        check("cache: mode 0600", (os.stat(cache).st_mode & 0o777) == 0o600)
+
+        for wrap in ("x {v} y", "KEY={v}", '"k":"{v}"', "postgres://u:{v}@h/db", "Authorization: {v}"):
+            text = wrap.format(v=value)
+            found = [f for f in find(text, known) if f.kind == "known"]
+            check("known in " + wrap, len(found) == 1 and text[found[0].start:found[0].end] == value
+                  and found[0].name == "MY_VAR" and found[0].tier == "certain")
+            check("known redacted in " + wrap, value not in redact(text, known)[0])
+
+        fresh = rand(24)
+        with open(env, "w") as f:
+            f.write(f"MY_VAR={fresh}\n")
+        later = time.time() + 10
+        os.utime(env, (later, later))
+        known = load_known(cfg, cache=cache, home=home)
+        check("refresh: new", hashlib.sha256(fresh.encode()).hexdigest() in known)
+        check("refresh: old gone", h not in known)
+
+        bad_cfg = os.path.join(tmp, "config.json")
+        with open(bad_cfg, "w") as f:
+            f.write("{not json")
+        real_err, sys.stderr = sys.stderr, open(os.devnull, "w")
+        try:
+            check("config: invalid gives defaults", load_config(bad_cfg) == DEFAULT_CONFIG)
+        finally:
+            sys.stderr.close()
+            sys.stderr = real_err
+        check("config: missing gives defaults", load_config(os.path.join(tmp, "none.json")) == DEFAULT_CONFIG)
+        with open(bad_cfg, "w") as f:
+            json.dump({"scan_roots": ["/x"]}, f)
+        check("config: merged", load_config(bad_cfg)["scan_roots"] == ["/x"] and load_config(bad_cfg)["ignore"] == [])
 
 
 if __name__ == "__main__":
