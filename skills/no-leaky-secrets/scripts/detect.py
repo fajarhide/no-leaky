@@ -43,6 +43,7 @@ ASSIGN = re.compile(
     r"(?<![A-Za-z0-9_])(?P<name>[A-Za-z0-9_]*(?i:key|token|secret|passwd|password)[A-Za-z0-9_]*)"
     r"(?:\\?[\"'])?[ \t]*[:=][ \t]*(?:\\?[\"'])?(?P<val>[A-Za-z0-9_\-./+=:@!#$%^&*]{16,})"
 )
+SENSITIVE_WORD = re.compile(r"(?i)key|token|secret|passw")
 NAME_BEFORE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\\?[\"'])?[ \t]*[:=][ \t]*(?:\\?[\"'])?$")
 PUBLIC_NAME = re.compile(r"^(?:PUBLIC_|NEXT_PUBLIC_|VITE_|EXPO_PUBLIC_)|PUBLISHABLE|ANON|VAPID_PUBLIC|CLIENT_ID", re.I)
 PLACEHOLDER = re.compile(r"changeme|example|placeholder|dummy|your_|your-|xxxx|<|>|\$\{", re.I)
@@ -67,6 +68,18 @@ def _code_like(text, val, end):
     nxt = text[end:end + 1]
     return (nxt in ("(", "[") or val[0] in "/~$=" or val.startswith("./") or val.isdigit()
             or bool(DOTTED.match(val)) or bool(WORDS.match(val)))
+
+
+def _assignments(text):
+    """ASSIGN matches, run only on lines that hold a sensitive word."""
+    done = -1
+    for hit in SENSITIVE_WORD.finditer(text):
+        if hit.start() < done:
+            continue
+        lo = text.rfind("\n", 0, hit.start()) + 1
+        hi = text.find("\n", hit.end())
+        done = hi = len(text) if hi < 0 else hi
+        yield from ASSIGN.finditer(text, lo, hi)
 
 
 def _name_before(text, start):
@@ -184,10 +197,13 @@ def _candidates(token):
 def find(text, known=frozenset()):
     cands = []  # (start, end, kind, tier, name, order)
     if known:
+        seen = {}
         for m in TOKEN.finditer(text):
             for off, piece in _candidates(m.group()):
                 if len(piece) >= 16:
-                    h = hashlib.sha256(piece.encode("utf-8", "surrogatepass")).hexdigest()
+                    h = seen.get(piece)
+                    if h is None:
+                        h = seen[piece] = hashlib.sha256(piece.encode("utf-8", "surrogatepass")).hexdigest()
                     if h in known:
                         s = m.start() + off
                         name = known.get(h) if isinstance(known, dict) else None
@@ -198,7 +214,7 @@ def find(text, known=frozenset()):
             if is_placeholder(text[s:e]):
                 continue
             cands.append((s, e, kind, tier, None, order))
-    for m in ASSIGN.finditer(text):
+    for m in _assignments(text):
         s, e = m.span("val")
         val = m.group("val")
         if _code_like(text, val, e) or is_placeholder(val):
@@ -368,11 +384,32 @@ def test():
     check("fp shape", len(fingerprint("x")) == 8 and all(c in "0123456789abcdef" for c in fingerprint("x")))
 
     test_known(check)
+    test_speed(check)
 
     if bad:
         print("WRONG:", *bad, sep="\n  ")
         sys.exit(1)
     print("ok: detect self-check passed")
+
+
+def test_speed(check):
+    import time
+
+    known = {hashlib.sha256(rand(24).encode()).hexdigest(): f"VAR_{i}" for i in range(500)}
+    line = "2026-11-10T10:00:00Z INFO request served path=/api/v1/items/12345 status=200 dur_ms=12.5 user_agent=curl/8.4\n"
+    lines = [line] * (2_000_000 // len(line))
+    planted = [fake(random.choice(["aws", "github", "google", "stripe", "npm"])) for _ in range(50)]
+    step = len(lines) // 50
+    for i, v in enumerate(planted):
+        lines[i * step] = f"2026-11-10T10:00:01Z WARN loaded key {v} from env\n"
+    text = "".join(lines)
+    t0 = time.perf_counter()
+    new, findings = redact(text, known)
+    took = time.perf_counter() - t0
+    check(f"speed: 2 MB in under 1 s (took {took:.2f} s)", took < 1.0)
+    check("speed: 50 findings", len(findings) == 50)
+    markers = sum(len(f"[secret: {f.kind}, fp {f.fp}]") for f in findings)
+    check("speed: no other byte lost", len(new) == len(text) - sum(len(v) for v in planted) + markers)
 
 
 def test_known(check):
