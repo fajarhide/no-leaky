@@ -36,7 +36,7 @@ SECRET_SUBPATH = re.compile(
     r"|\.config/rclone/rclone\.conf|\.cloudflared/[^/]+|\.gnupg/.+)$"
     r"|(?:^|/)\.ssh/(?!.*\.pub$)(?!config$|known_hosts|authorized_keys)[^/]+$"
 )
-SECRET_DIR = re.compile(r"^/etc/wireguard/|^/etc/shadow$")
+SECRET_DIR = re.compile(r"^/etc/wireguard/|^/etc/shadow$|^/proc/[^/]+/environ$")
 CODE_EXT = re.compile(r"\.(?:py|rb|rs|js|ts|tsx|jsx|go|md|sh|erb|html|css|lock|snap|txt)$")
 SAFE_ENV = re.compile(r"\.(?:example|sample|template|dist)$")
 SECRET_NAME = re.compile(
@@ -55,6 +55,8 @@ SECRET_COMMANDS = [
     (re.compile(r"\bsystemctl\s+(?:show|cat)\b"), "systemctl show or cat"),
     (re.compile(r"\bdocker\s+inspect\b(?!.*(?:\.State|\.Image|\.RestartCount|\.NetworkSettings|\.Name|\.Mounts))"), "docker inspect"),
     (re.compile(r"\bprintenv\b|(?:^|\s)env\s*$"), "printenv or env"),
+    (re.compile(r"\bexport\s+-p\b|\bdeclare\s+-[a-zA-Z]*[xp]|(?:^|\s)(?:set|export|declare|typeset)\s*$"),
+     "export -p, set or declare"),
     (re.compile(r"\bps\b[^|;&]*(?:\baux\b|-ef\b|-eo\s+\S*args|-o\s+\S*(?:args|command))"), "ps with arguments"),
     (re.compile(r"\bsecurity\s+find-[\w-]*password\b.*\s-w\b"), "security find-generic-password -w"),
     (re.compile(r"\bgh\s+auth\s+token\b"), "gh auth token"),
@@ -106,7 +108,8 @@ def is_source(token):
     m = HOME_FILE.match(path)
     if m and not m.group(2) and m.group(1) not in SAFE_DOTFILES:
         return True
-    name = path.rsplit("/", 1)[-1]
+    # A glob such as `.env*` or `*.pem` reads the files it expands to; judge the literal part.
+    name = re.sub(r"[*?\[\]]", "", path.rsplit("/", 1)[-1])
     if CODE_EXT.search(name) or SAFE_ENV.search(name):
         return False
     return bool(SECRET_NAME.search(name))
@@ -183,6 +186,11 @@ def check_pipeline(stages, depth):
             continue
         if stage[0] == "sed" and any(t.startswith("-i") for t in stage):
             continue
+        # `git show REV:path` and `git cat-file -p REV:path` print a file from history.
+        if stage[0] == "git" and len(stage) > 1 and stage[1] in ("show", "cat-file"):
+            for t in stage[2:]:
+                if ":" in t and "://" not in t and is_source(t.split(":", 1)[1]):
+                    return t
         sources = [t for t in stage if is_source(t)]
         if sources and any(t in READERS for t in stage):
             return sources[0]
@@ -244,8 +252,9 @@ def check_command(command, cfg=None, depth=0):
         # Quoted arguments stay out, so a commit message naming a command does not trip this.
         for stage in stages:
             flat = " ".join(t for t in stage if " " not in t)
+            full = " ".join(stage)  # a --format value with spaces names the safe fields
             for pattern, name in SECRET_COMMANDS:
-                if pattern.search(flat):
+                if pattern.search(full if name == "docker inspect" else flat):
                     filtered = last and last[0] in ("grep", "egrep") and any(re.fullmatch(r"-\w*[coql]\w*E?", t) for t in last)
                     if not (ends_unseen(stages) or filtered):
                         return name
@@ -265,8 +274,10 @@ def check(payload, cfg=None):
         return check_command(args.get("command", ""))
     if tool == "Read" and is_source(args.get("file_path", "")):
         return args["file_path"]
-    if tool == "Grep" and is_source(args.get("path", "")) and args.get("output_mode") == "content":
-        return args["path"]
+    if tool == "Grep" and args.get("output_mode") == "content":
+        for key in ("path", "glob"):
+            if is_source(args.get(key) or ""):
+                return args[key]
     return None
 
 
@@ -311,6 +322,16 @@ def test():
         "gh auth token",
         "kubectl get secret db -o yaml",
         "cat /etc/wireguard/wg0.conf",
+        "cat .env*",
+        "cat config/*.pem",
+        "export -p",
+        "set",
+        "declare -x",
+        "declare -p",
+        "cat /proc/self/environ",
+        "git show HEAD:.env",
+        "git show abc123:config/.env.production",
+        "git cat-file -p HEAD:.env",
     ]
     allowed = [
         ". ~/.my-token",
@@ -340,6 +361,14 @@ def test():
         "ls ~/.claude/projects/-Users-x-proj/memory",
         'ls "/Users/x/Library/Application Support/tool/profiles/abc/home/projects/p"',
         "wc -c ~/.claude.json",
+        "docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' app",
+        "docker inspect -f '{{.State.Status}}' app",
+        "set -e",
+        "set -euo pipefail",
+        "export FOO=bar",
+        "git show HEAD:README.md",
+        "git show HEAD --stat",
+        "cat *.md",
     ]
     bad = [c for c in denied if not check_command(c, cfg)] + [c for c in allowed if check_command(c, cfg)]
 
@@ -372,6 +401,10 @@ def test():
         bad.append("Grep count on .env denied")
     if not check({"tool_name": "Grep", "tool_input": {"path": ".env", "output_mode": "content"}}, cfg):
         bad.append("Grep content on .env allowed")
+    if not check({"tool_name": "Grep", "tool_input": {"path": ".", "glob": ".env*", "output_mode": "content"}}, cfg):
+        bad.append("Grep content with an .env glob allowed")
+    if check({"tool_name": "Grep", "tool_input": {"path": ".", "glob": "*.py", "output_mode": "content"}}, cfg):
+        bad.append("Grep content on *.py denied")
     msg = deny_message(".env")
     if "`. file`" not in msg or "with `!`" not in msg or ".env" not in msg:
         bad.append("deny message lacks the safe way or the ! line")

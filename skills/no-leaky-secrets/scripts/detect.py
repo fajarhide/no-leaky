@@ -32,8 +32,8 @@ VENDOR = [
     ("stripe", "certain", r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}", 0),
     ("stripe_publishable", "public", r"\bpk_(?:live|test)_[A-Za-z0-9]{16,}", 0),
     ("private_key", "certain",
-     r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?:\\[rn]|\s)+[A-Za-z0-9+/=]{16,})+"
-     r"(?:(?:\\[rn]|\s)*-----END [A-Z ]*PRIVATE KEY-----)?", 0),
+     r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?:\\+[rn]|\s)+[A-Za-z0-9+/=]{16,})+"
+     r"(?:(?:(?:\\+[rn]|\s)+[A-Za-z0-9+/=]{1,15})?(?:\\+[rn]|\s)*-----END [A-Z ]*PRIVATE KEY-----)?", 0),
     ("jwt", "likely", r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", 0),
     ("url_password", "likely", r"\b[a-z][a-z0-9+.-]*://[^\s:/@\"']+:([^\s@/\"']{8,})@", 1),
     ("bearer", "likely", r"(?i)\bbearer\s+([A-Za-z0-9._~+/-]{16,}=*)", 1),
@@ -49,9 +49,13 @@ ASSIGN = re.compile(
 )
 SENSITIVE_WORD = re.compile(r"(?i)key|token|secret|passw")
 NAME_BEFORE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\\?[\"'])?[ \t]*[:=][ \t]*(?:\\?[\"'])?$")
-PUBLIC_NAME = re.compile(r"^(?:PUBLIC_|NEXT_PUBLIC_|VITE_|EXPO_PUBLIC_)|PUBLISHABLE|ANON|VAPID_PUBLIC|CLIENT_ID", re.I)
+PUBLIC_NAME = re.compile(
+    r"^(?:PUBLIC_|NEXT_PUBLIC_|VITE_|EXPO_PUBLIC_)|(?:^|_)(?:PUBLISHABLE|ANON|VAPID_PUBLIC|CLIENT_?ID)(?:_|$)", re.I)
+# A public-looking name never makes a secret-only key format public (a real key in VITE_ is a leak).
+PUBLIC_BY_NAME = {"google", "jwt", "assignment", "known"}
 PLACEHOLDER = re.compile(r"changeme|example|placeholder|dummy|your_|your-|xxxx|<|>|\$\{", re.I)
-FIXTURE = re.compile(r"example|sample|test|fixture|mock", re.I)
+FIXTURE = re.compile(r"^(?:tests?|testdata|spec|fixtures?|examples?|samples?|mocks?|__mocks__|__fixtures__)$"
+                     r"|\.(?:example|sample|template|dist)(?:\.[\w-]+)?$", re.I)
 DOTTED = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$")
 WORDS = re.compile(r"^[A-Za-z_]+$")
 
@@ -216,13 +220,14 @@ def load_known(cfg, cache=CACHE_PATH, home=None, max_age=None):
             entry, changed = {"mtime": mtime, "format": 2, "values": _source_values(path)}, True
         fresh[path] = entry
     if changed or set(fresh) != set(stored):
+        import tempfile
         os.makedirs(os.path.dirname(cache), exist_ok=True)
-        tmp = cache + ".tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(cache), prefix=".known-")  # mode 0600
         with os.fdopen(fd, "w") as f:
             json.dump(fresh, f)
-        os.chmod(tmp, 0o600)
         os.replace(tmp, cache)
+    elif os.path.exists(cache):
+        os.utime(cache, None)  # the walk found nothing new; start the max_age window again
     return _known_from(fresh)
 
 
@@ -280,7 +285,7 @@ def find(text, known=frozenset()):
     out = []
     for s, e, kind, tier, name, _ in sorted(taken):
         name = name or _name_before(text, s)
-        if name and PUBLIC_NAME.search(name):
+        if name and kind in PUBLIC_BY_NAME and PUBLIC_NAME.search(name):
             tier = "public"
         out.append(Finding(kind, tier, s, e, fingerprint(text[s:e]), name))
     return out
@@ -398,6 +403,23 @@ def test():
     g = fake("google")
     found = find(f"NEXT_PUBLIC_MAPS_KEY={g}")
     check("vendor key under public name is public", len(found) == 1 and found[0].tier == "public")
+    for kind in ("stripe", "anthropic", "aws", "github"):
+        found = find(f"VITE_KEY={fake(kind)}")
+        check(f"real {kind} under a public name stays certain", len(found) == 1 and found[0].tier == "certain")
+    found = find(f"CANONICAL_KEY={rand(24)}")
+    check("CANONICAL is not ANON", len(found) == 1 and found[0].tier == "likely")
+    found = find(f"SUPABASE_ANON_KEY={fake('jwt')}")
+    check("anon jwt is public", len(found) == 1 and found[0].tier == "public")
+
+    pem = fake("private_key")
+    lines = pem.splitlines()
+    short = "AbC1=="
+    pem_short = "\n".join(lines[:-1] + [short, lines[-1]])
+    new, _ = redact(pem_short)
+    check("pem short last line redacted", short not in new and "END OPENSSH" not in new)
+    double = json.dumps(json.dumps({"private_key": pem}))
+    new, found = redact(double)
+    check("pem double escaped", len(found) == 1 and lines[1] not in new)
 
     unchanged = [
         "SECRET_NAME = re.compile(",
@@ -462,6 +484,11 @@ def test():
     check("fixture path", is_fixture_path("/repo/tests/fixtures/keys.txt"))
     check("fixture example env", is_fixture_path("/repo/.env.example"))
     check("not fixture", not is_fixture_path("/repo/app/.env"))
+    for path in ("/project/latest-api/.env", "/x/contest/.env", "/x/attestation/a.yml", "/x/hammock/.env"):
+        check("not fixture: " + path, not is_fixture_path(path))
+    for path in ("/repo/test/keys.txt", "/repo/spec/fixtures/a.json", "/repo/__mocks__/x.js", "/r/examples/.env",
+                 "/r/app/.env.sample", "/r/app/config.template.yml"):
+        check("fixture: " + path, is_fixture_path(path))
     check("fp shape", len(fingerprint("x")) == 8 and all(c in "0123456789abcdef" for c in fingerprint("x")))
 
     test_known(check)
@@ -564,6 +591,11 @@ def test_known(check):
             check("max_age: no walk", False)
         finally:
             globals()["known_sources"] = real_sources
+
+        stale = time.time() - 3600
+        os.utime(cache, (stale, stale))
+        load_known(cfg, cache=cache, home=home, max_age=600)
+        check("walk with no change refreshes cache age", time.time() - os.stat(cache).st_mtime < 60)
 
         bad_cfg = os.path.join(tmp, "config.json")
         with open(bad_cfg, "w") as f:

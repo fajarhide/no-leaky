@@ -56,8 +56,32 @@ def _log(line, log):
         pass
 
 
-def run(raw, known=None, log=LOG, after=None):
-    """Hook entry. Never blocks work: on any error it logs the error type and passes output through."""
+def _their(raw, after, timeout, tool, log):
+    """Run the wrapped hook. Returns (parsed JSON or None, its stdout). Any failure counts as no output."""
+    try:
+        proc = subprocess.run(after, shell=True, input=raw, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as e:
+        _log(f"{tool} after {type(e).__name__}", log)
+        return None, ""
+    if proc.returncode != 0:
+        # Its stdout and stderr may carry the raw value, so neither is passed on.
+        _log(f"{tool} after exit {proc.returncode}", log)
+        return None, ""
+    if not proc.stdout.strip():
+        return None, ""
+    try:
+        parsed = json.loads(proc.stdout)
+    except ValueError:
+        _log(f"{tool} after non-JSON output", log)
+        return None, ""
+    return (parsed, proc.stdout) if isinstance(parsed, dict) else (None, "")
+
+
+def run(raw, known=None, log=LOG, after=None, timeout=50):
+    """Hook entry. Never blocks work: on any error it logs the error type and passes output through.
+
+    timeout stays under Claude Code's default 60 s hook limit so this hook is not killed first.
+    """
     their_out = ""
     tool = "?"
     try:
@@ -65,20 +89,14 @@ def run(raw, known=None, log=LOG, after=None):
         tool = str(payload.get("tool_name"))
         their = None
         if after:
-            proc = subprocess.run(after, shell=True, input=raw, capture_output=True, text=True, timeout=60)
-            if proc.returncode != 0:
-                sys.stdout.write(proc.stdout)
-                sys.stderr.write(proc.stderr)
-                return proc.returncode
-            their_out = proc.stdout
-            their = json.loads(their_out) if their_out.strip() else None
+            their, their_out = _their(raw, after, timeout, tool, log)
         base = payload.get("tool_response")
-        if isinstance(their, dict):
+        if their is not None:
             base = (their.get("hookSpecificOutput") or {}).get("updatedToolOutput", base)
         if known is None:
             known = detect.load_known(detect.load_config(), max_age=600)
         ours = rewrite(dict(payload, tool_response=base), known)
-        if ours and isinstance(their, dict):
+        if ours and their is not None:
             their.setdefault("hookSpecificOutput", {}).update(ours["hookSpecificOutput"])
             json.dump(their, sys.stdout)
         elif ours:
@@ -167,6 +185,26 @@ def test():
         check("after: their rewrite kept", so.startswith("A=ONE"))
         check("after: secret redacted", key not in so and "[secret: github" in so)
         check("after: their other fields kept", chained.get("systemMessage") == "other ran")
+
+        cases = {
+            "non-JSON stdout": "import sys\nsys.stdin.read()\nprint('not json')\n",
+            "exit 2 with the value on stderr": "import sys\nsys.stderr.write(sys.stdin.read())\nsys.exit(2)\n",
+            "timeout": "import sys,time\nsys.stdin.read()\ntime.sleep(5)\n",
+        }
+        for label, body in cases.items():
+            hook = os.path.join(tmp, "h.py")
+            with open(hook, "w") as f:
+                f.write(body)
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = run(json.dumps(bash), known={}, log=log, after=f"{sys.executable} {hook}", timeout=1)
+            out = stdout.getvalue()
+            check(f"{label}: exit 0", code == 0)
+            check(f"{label}: still redacted", "[secret: github" in out and key not in out + stderr.getvalue())
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+            code = run(json.dumps(bash), known={}, log=log, after=os.path.join(tmp, "missing-binary"))
+        check("missing binary: still redacted", code == 0 and "[secret: github" in stdout.getvalue())
 
         silent = os.path.join(tmp, "silent.py")
         with open(silent, "w") as f:

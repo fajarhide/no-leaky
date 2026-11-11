@@ -36,12 +36,13 @@ def _ours(command, script=None):
 
 def _overlaps(matcher):
     import re
+    """The subset of TOOLS a hook matcher fires on."""
     if matcher in (None, "", "*"):
-        return True
+        return set(TOOLS)
     try:
-        return any(re.fullmatch(matcher, t) for t in TOOLS)
+        return {t for t in TOOLS if re.fullmatch(matcher, t)}
     except re.error:
-        return any(t in matcher for t in TOOLS)
+        return {t for t in TOOLS if t in matcher}
 
 
 def _commands(groups):
@@ -57,23 +58,23 @@ def install(s):
         pre.append({"matcher": "|".join(TOOLS), "hooks": [{"type": "command", "command": _cmd("guard.py")}]})
         changes.append("PreToolUse: added guard.py on Bash|Read|Grep")
     post = hooks.setdefault("PostToolUse", [])
-    covered = False
+    covered = set()
     for g in post:
-        if not _overlaps(g.get("matcher")):
+        tools = _overlaps(g.get("matcher"))
+        if not tools:
             continue
         for h in g.get("hooks", []):
             if h.get("type") != "command":
                 continue
-            if _ours(h["command"], "filter.py"):
-                covered = True
-            else:
+            if not _ours(h["command"], "filter.py"):
                 # Hooks on one event run in parallel and the last rewrite wins, so run theirs through ours.
                 h["command"] = _cmd("filter.py", "--after", h["command"])
-                covered = True
                 changes.append(f"PostToolUse: {g.get('matcher')!r} hook now runs through filter.py --after")
-    if not covered:
-        post.append({"matcher": "|".join(TOOLS), "hooks": [{"type": "command", "command": _cmd("filter.py")}]})
-        changes.append("PostToolUse: added filter.py on Bash|Read|Grep")
+            covered |= tools
+    missing = [t for t in TOOLS if t not in covered]
+    if missing:
+        post.append({"matcher": "|".join(missing), "hooks": [{"type": "command", "command": _cmd("filter.py")}]})
+        changes.append(f"PostToolUse: added filter.py on {'|'.join(missing)}")
     ups = hooks.setdefault("UserPromptSubmit", [])
     if not any(_ours(h["command"], "prompt_guard.py") for h in _commands(ups)):
         ups.append({"hooks": [{"type": "command", "command": _cmd("prompt_guard.py")}]})
@@ -105,13 +106,16 @@ def uninstall(s):
         del s["hooks"]
 
 
-def _write(path, text):
-    tmp = path + ".no-leaky-tmp"
+def _write(path, text, mode_from=None):
+    """Atomic write through a symlink (dotfile managers), keeping the mode of mode_from or of the file."""
+    target = os.path.realpath(path)
+    tmp = target + ".no-leaky-tmp"
     with open(tmp, "w") as f:
         f.write(text)
-    if os.path.exists(path):
-        os.chmod(tmp, os.stat(path).st_mode & 0o777)
-    os.replace(tmp, path)
+    src = mode_from or target
+    if os.path.exists(src):
+        os.chmod(tmp, os.stat(src).st_mode & 0o777)
+    os.replace(tmp, target)
 
 
 def _gitignore():
@@ -176,7 +180,7 @@ def main(argv, run_tests=True):
     os.makedirs(cfgdir, exist_ok=True)
     if raw is not None:
         backup = f"{path}.no-leaky-backup-{time.strftime('%Y%m%d-%H%M%S')}"
-        _write(backup, raw)
+        _write(backup, raw, mode_from=path)
         print(f"backup: {backup}")
     _write(path, json.dumps(new, indent=2) + "\n")
     print("changed " + path + ":", *changes, sep="\n- ")
@@ -195,7 +199,7 @@ def test():
         if not cond:
             bad.append(label)
 
-    other_post = "omni --post-hook"
+    other_post = "other-rewriter --post-hook"
     original = {
         "env": {"SOME_FLAG": "1"},
         "hooks": {
@@ -263,6 +267,25 @@ def test():
         check("env config dir used, filter added on its own",
               any(g.get("matcher") == "Bash|Read|Grep" and "filter.py" in g["hooks"][0]["command"]
                   for g in s["hooks"]["PostToolUse"]))
+
+        partial = os.path.join(tmp, "partial")
+        os.makedirs(partial)
+        real_file = os.path.join(tmp, "dotfiles-settings.json")
+        with open(real_file, "w") as f:
+            json.dump({"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "x"}]}]}}, f)
+        os.chmod(real_file, 0o600)
+        os.symlink(real_file, os.path.join(partial, "settings.json"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["--config-dir", partial], run_tests=False)
+        with open(real_file) as f:
+            s = json.load(f)
+        post = s["hooks"]["PostToolUse"]
+        check("partial overlap: Bash wrapped", "filter.py" in post[0]["hooks"][0]["command"])
+        check("partial overlap: Read and Grep get their own filter",
+              any(g.get("matcher") == "Read|Grep" and "filter.py" in g["hooks"][0]["command"] for g in post))
+        check("symlink kept", os.path.islink(os.path.join(partial, "settings.json")))
+        bk = [n for n in os.listdir(partial) if "no-leaky-backup" in n]
+        check("backup keeps 0600", bk and (os.stat(os.path.join(partial, bk[0])).st_mode & 0o777) == 0o600)
 
         repo = os.path.join(tmp, "repo")
         os.makedirs(os.path.join(repo, ".git"))

@@ -71,48 +71,60 @@ def _blocks(content):
     return content if isinstance(content, list) else [{"type": "text", "text": content}]
 
 
-def claude_events(path, stats):
+def claude_events(path, stats, known=frozenset()):
     """(session, date, route, text) for each part of a Claude Code transcript that can carry a value."""
     tools = {}
     session = os.path.splitext(os.path.basename(path))[0]
     for e in _lines(path, stats):
-        if not isinstance(e, dict):
+        try:
+            events = list(_claude_line(e, tools, session, known))
+        except Exception:  # a valid but unexpected line shape must not end the scan
+            stats["bad_lines"] += 1
             continue
-        sid = e.get("sessionId") or session
-        date = (e.get("timestamp") or "")[:10]
-        msg = e.get("message") if isinstance(e.get("message"), dict) else {}
-        kind = e.get("type")
-        if kind == "assistant":
-            for b in _blocks(msg.get("content") or []):
-                if isinstance(b, dict) and b.get("type") == "tool_use":
-                    inp = b.get("input") or {}
-                    arg = inp.get("command") or inp.get("file_path") or inp.get("pattern") or inp.get("url") or ""
-                    tools[b.get("id")] = f"{b.get('name')}: {str(arg)[:60]}".rstrip(": ")
-            yield sid, date, "the agent wrote it", json.dumps(msg.get("content"))
-        elif kind == "user":
-            results = [b for b in _blocks(msg.get("content") or "") if isinstance(b, dict) and b.get("type") == "tool_result"]
-            if results:
-                for b in results:
-                    route = tools.get(b.get("tool_use_id"), "a tool call")
-                    yield sid, date, route, json.dumps(b.get("content"))
-            else:
-                text = json.dumps(msg.get("content"))
-                route = ("context injected by a hook or command" if e.get("isMeta")
-                         else "you ran it with !" if "<bash-stdout>" in text else PASTED)
-                yield sid, date, route, text
-        elif kind == "system" and "blocked by hook" in str(e.get("content")):
-            yield sid, date, BLOCKED, json.dumps(e.get("content"))
-        elif kind in DUPLICATE_TYPES:
-            continue
+        yield from events
+
+
+def _claude_line(e, tools, session, known):
+    if not isinstance(e, dict):
+        return
+    sid = str(e.get("sessionId") or session)
+    date = str(e.get("timestamp") or "")[:10]
+    msg = e.get("message") if isinstance(e.get("message"), dict) else {}
+    kind = e.get("type")
+    if kind == "assistant":
+        for b in _blocks(msg.get("content") or []):
+            if isinstance(b, dict) and b.get("type") == "tool_use":
+                inp = b.get("input")
+                inp = inp if isinstance(inp, dict) else {"command": str(inp)}
+                arg = inp.get("command") or inp.get("file_path") or inp.get("pattern") or inp.get("url") or ""
+                # The route is printed, so the command it quotes is redacted before it is cut short.
+                arg = detect.redact(str(arg), known)[0]
+                tools[b.get("id")] = f"{b.get('name')}: {arg[:60]}".rstrip(": ")
+        yield sid, date, "the agent wrote it", json.dumps(msg.get("content"))
+    elif kind == "user":
+        results = [b for b in _blocks(msg.get("content") or "") if isinstance(b, dict) and b.get("type") == "tool_result"]
+        if results:
+            for b in results:
+                route = tools.get(b.get("tool_use_id"), "a tool call")
+                yield sid, date, route, json.dumps(b.get("content"))
         else:
-            yield sid, date, "transcript metadata", json.dumps(e)
+            text = json.dumps(msg.get("content"))
+            route = ("context injected by a hook or command" if e.get("isMeta")
+                     else "you ran it with !" if "<bash-stdout>" in text else PASTED)
+            yield sid, date, route, text
+    elif kind == "system" and "blocked by hook" in str(e.get("content")):
+        yield sid, date, BLOCKED, json.dumps(e.get("content"))
+    elif kind in DUPLICATE_TYPES:
+        return
+    else:
+        yield sid, date, "transcript metadata", json.dumps(e)
 
 
 def generic_events(path, stats):
     session = os.path.splitext(os.path.basename(path))[0]
     if path.endswith(".jsonl"):
         for e in _lines(path, stats):
-            date = str((e.get("timestamp") or "") if isinstance(e, dict) else "")[:10]
+            date = str(e.get("timestamp") or "")[:10] if isinstance(e, dict) else ""
             yield session, date, "unknown", json.dumps(e)
     else:
         try:
@@ -147,7 +159,8 @@ def _scan_file(job):
     stats = {"bad_lines": 0}
     rows = set()
     try:
-        for sid, date, route, text in (claude_events if is_claude else generic_events)(path, stats):
+        events = claude_events(path, stats, known) if is_claude else generic_events(path, stats)
+        for sid, date, route, text in events:
             if since and date and date < since:
                 continue
             for f in detect.find(text, known):
@@ -301,6 +314,7 @@ def test():
         with open(os.path.join(proj, ".env"), "w") as f:
             f.write(f"APP_SECRET={known_value}\n")
         pasted, diff_key, public = detect.fake("github"), detect.fake("google"), detect.rand(24)
+        in_cmd = detect.fake("stripe")
 
         def line(**kw):
             base = {"sessionId": "s-1", "timestamp": "2026-11-01T10:00:00.000Z", "cwd": proj}
@@ -320,6 +334,10 @@ def test():
             line(type="user", timestamp="2026-11-02T09:00:00.000Z", message={"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": "t2", "content": f"-FIREBASE_KEY = {diff_key}\n"}]}),
             line(type="user", message={"role": "user", "content": f"NEXT_PUBLIC_API_KEY={public}"}),
+            line(type="assistant", message={"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t3", "name": "Bash", "input": {"command": f"export SK={in_cmd}; curl x"}}]}),
+            line(type="user", message={"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t3", "content": "ok"}]}),
         ]
         body = "\n".join(lines) + "\n"
         for folder in ("p-one", "p-two"):
@@ -331,6 +349,10 @@ def test():
             f.write(line(sessionId="s-2", type="user", message={"role": "user", "content": "hi"}).encode() + b"\n")
             f.write(b'{"type": "user", "message": {"content": "caf\xe9 \xff"}}\n')
             f.write(b'{"type": "assistant", "message": {"content": [{"type": "te')
+        with open(os.path.join(cfgdir, "projects", "p-one", "s-3.jsonl"), "w") as f:
+            f.write(json.dumps({"type": "user", "timestamp": 123, "message": {"content": "x"}}) + "\n")
+            f.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "z", "name": "Bash", "input": "a string"}]}}) + "\n")
 
         cfg = dict(detect.DEFAULT_CONFIG, scan_roots=[proj])
         out = io.StringIO()
@@ -342,7 +364,7 @@ def test():
             rep = f.read()
         res = run_scan("all", None, None, cfg, home, cfgdir)
         real = [lk for lk in res["leaks"].values() if lk["tier"] != "public"]
-        check("three real findings", len(real) == 3)
+        check("four real findings", len(real) == 4)
         check("each in one session", all(len(lk["sessions"]) == 1 for lk in real))
         routes = sorted(lk["route"] for lk in real)
         check("route pasted", "you pasted it" in routes)
@@ -353,17 +375,17 @@ def test():
               and known_leak[0]["source"] == os.path.join(proj, ".env"))
         check("public listed apart", any(lk["tier"] == "public" for lk in res["leaks"].values()))
         check("dates", any(lk["first"] == "2026-11-02" for lk in real))
-        check("bad lines counted", res["bad_lines"] == 2)
-        check("claude covered", res["coverage"]["claude"].startswith("covered (3 files"))
+        check("bad lines counted, odd valid lines read", res["bad_lines"] == 2)
+        check("claude covered", res["coverage"]["claude"].startswith("covered (4 files"))
         check("codex not found", res["coverage"]["codex"] == "not found")
         check("gemini not found", res["coverage"]["gemini"] == "not found")
-        for v in (known_value, pasted, diff_key, public):
+        for v in (known_value, pasted, diff_key, public, in_cmd):
             check("no value in stdout", v not in text)
             check("no value in report", v not in rep)
         for lk in real:
             check("fp in report " + lk["kind"], lk["fp"] in rep and lk["fp"] in text)
         check("exit 1 on real", code == 1)
-        check("certain section first", "## Certain, act on these (3)" in rep and "## Likely, check these (0)" in rep
+        check("certain section first", "## Certain, act on these (4)" in rep and "## Likely, check these (0)" in rep
               and rep.index("## Certain") < rep.index("## Likely"))
 
         cfg_ign = dict(cfg, ignore=[{"fp": lk["fp"], "reason": "rotated", "date": "2026-11-10"} for lk in real])
