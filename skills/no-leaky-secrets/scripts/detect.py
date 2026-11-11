@@ -31,16 +31,19 @@ VENDOR = [
     ("stripe", "certain", r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}", 0),
     ("stripe_publishable", "public", r"\bpk_(?:live|test)_[A-Za-z0-9]{16,}", 0),
     ("private_key", "certain",
-     r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:.*?-----END [A-Z ]*PRIVATE KEY-----|.*\Z)", 0),
+     r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?:\\[rn]|\s)+[A-Za-z0-9+/=]{16,})+"
+     r"(?:(?:\\[rn]|\s)*-----END [A-Z ]*PRIVATE KEY-----)?", 0),
     ("jwt", "likely", r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", 0),
     ("url_password", "likely", r"\b[a-z][a-z0-9+.-]*://[^\s:/@\"']+:([^\s@/\"']{8,})@", 1),
     ("bearer", "likely", r"(?i)\bbearer\s+([A-Za-z0-9._~+/-]{16,}=*)", 1),
 ]
 VENDOR = [(k, t, re.compile(p, re.S), g) for k, t, p, g in VENDOR]
+# One cheap pass that every VENDOR pattern needs to hit first.
+QUICK = re.compile(r"AKIA|ASIA|gh[pousr]_|github_pat_|sk-|AIza|xox|npm_|[srp]k_|-----BEGIN|eyJ|://|[Bb][Ee][Aa][Rr][Ee][Rr]")
 
 # A sensitive name, a separator, then a literal value. Code on the right is rejected in _code_like.
 ASSIGN = re.compile(
-    r"(?<![A-Za-z0-9_])(?P<name>[A-Za-z0-9_]*(?i:key|token|secret|passwd|password)[A-Za-z0-9_]*)"
+    r"(?:(?<=\\[nrt])|(?<![A-Za-z0-9_\\]))(?P<name>[A-Za-z0-9_]*(?i:key|token|secret|passwd|password)[A-Za-z0-9_]*)"
     r"(?:\\?[\"'])?[ \t]*[:=][ \t]*(?:\\?[\"'])?(?P<val>[A-Za-z0-9_\-./+=:@!#$%^&*]{16,})"
 )
 SENSITIVE_WORD = re.compile(r"(?i)key|token|secret|passw")
@@ -64,10 +67,32 @@ def is_fixture_path(path):
     return any(FIXTURE.search(part) for part in re.split(r"[/\\]", path))
 
 
+# Words next to key/token/secret that make the name describe something else (tokenUrl, cache_key).
+AFTER_WORD = set("""url uri urls name names id ids path file source src ref type estimate count limit len length
+    prefix header field env var policy endpoint ttl expiry expires timeout arn version kind label mode format
+    store dir location provider manager required enabled error errors tests test redacted hash line""".split())
+BEFORE_WORD = set("""cache sort primary foreign partition idempotency object row map lookup public max min next page
+    gateway dedupe dedup unique composite hash range shard cursor index storage translation query group routing
+    network i18n existing topology spawn file""".split())
+# A name that starts like a boolean flag (hasSavedKey, is_token_valid) holds a flag, not the secret.
+FLAG_FIRST = {"has", "have", "needs", "need", "is", "should", "use", "uses", "can", "show", "require", "requires"}
+NAME_WORDS = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
+SLUG = re.compile(r"^(?:[a-z]+\d*|\d+)(?:[-_:.](?:[a-z]+\d*|\d+)){2,}$")
+
+
+def _weak_name(name):
+    words = [w.lower() for w in NAME_WORDS.findall(name)]
+    hits = [i for i, w in enumerate(words) if w in ("key", "token", "secret", "passwd", "password")]
+    if not hits or words == ["key"]:
+        return True
+    i = hits[-1]
+    return words[0] in FLAG_FIRST or (i + 1 < len(words) and words[i + 1] in AFTER_WORD) or (i > 0 and words[i - 1] in BEFORE_WORD)
+
+
 def _code_like(text, val, end):
     nxt = text[end:end + 1]
-    return (nxt in ("(", "[") or val[0] in "/~$=" or val.startswith("./") or val.isdigit()
-            or bool(DOTTED.match(val)) or bool(WORDS.match(val)))
+    return (nxt in ("(", "[") or val[0] in "/~$=" or val.startswith("./") or val.isdigit() or "://" in val
+            or bool(DOTTED.match(val)) or bool(WORDS.match(val)) or bool(SLUG.match(val)))
 
 
 def _assignments(text):
@@ -127,8 +152,16 @@ def known_sources(cfg, home=None):
     return sorted(set(found))
 
 
+class Known(dict):
+    """{sha256 hex: variable name}, plus the value lengths so find() hashes only pieces that could match."""
+
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **kw)
+        self.lengths = set()
+
+
 def _source_values(path):
-    """{sha256 hex: variable name} for the secret-looking values in one source file."""
+    """{sha256 hex: [variable name, value length]} for the secret-looking values in one source file."""
     out = {}
     try:
         with open(path, errors="replace") as f:
@@ -149,7 +182,7 @@ def _source_values(path):
                 or val.isdigit() or DOTTED.match(val) or WORDS.match(val)
                 or ("://" in val and not re.search(r"://[^/@\s]+:[^/@\s]+@", val))):
             continue
-        out[hashlib.sha256(val.encode()).hexdigest()] = name.rsplit("/", 1)[-1].lstrip(":")
+        out[hashlib.sha256(val.encode()).hexdigest()] = [name.rsplit("/", 1)[-1].lstrip(":"), len(val)]
     return out
 
 
@@ -167,8 +200,8 @@ def load_known(cfg, cache=CACHE_PATH, home=None):
         except OSError:
             continue
         entry = stored.get(path)
-        if not entry or entry.get("mtime") != mtime:
-            entry, changed = {"mtime": mtime, "values": _source_values(path)}, True
+        if not entry or entry.get("mtime") != mtime or entry.get("format") != 2:
+            entry, changed = {"mtime": mtime, "format": 2, "values": _source_values(path)}, True
         fresh[path] = entry
     if changed or set(fresh) != set(stored):
         os.makedirs(os.path.dirname(cache), exist_ok=True)
@@ -178,9 +211,11 @@ def load_known(cfg, cache=CACHE_PATH, home=None):
             json.dump(fresh, f)
         os.chmod(tmp, 0o600)
         os.replace(tmp, cache)
-    known = {}
+    known = Known()
     for entry in fresh.values():
-        known.update(entry["values"])
+        for h, (name, length) in entry["values"].items():
+            known[h] = name
+            known.lengths.add(length)
     return known
 
 
@@ -198,9 +233,10 @@ def find(text, known=frozenset()):
     cands = []  # (start, end, kind, tier, name, order)
     if known:
         seen = {}
+        lengths = getattr(known, "lengths", None)
         for m in TOKEN.finditer(text):
             for off, piece in _candidates(m.group()):
-                if len(piece) >= 16:
+                if len(piece) >= 16 and (lengths is None or len(piece) in lengths):
                     h = seen.get(piece)
                     if h is None:
                         h = seen[piece] = hashlib.sha256(piece.encode("utf-8", "surrogatepass")).hexdigest()
@@ -208,7 +244,7 @@ def find(text, known=frozenset()):
                         s = m.start() + off
                         name = known.get(h) if isinstance(known, dict) else None
                         cands.append((s, s + len(piece), "known", "certain", name, len(VENDOR) + 1))
-    for order, (kind, tier, rx, group) in enumerate(VENDOR):
+    for order, (kind, tier, rx, group) in enumerate(VENDOR if QUICK.search(text) else ()):
         for m in rx.finditer(text):
             s, e = m.span(group)
             if is_placeholder(text[s:e]):
@@ -217,7 +253,7 @@ def find(text, known=frozenset()):
     for m in _assignments(text):
         s, e = m.span("val")
         val = m.group("val")
-        if _code_like(text, val, e) or is_placeholder(val):
+        if _code_like(text, val, e) or is_placeholder(val) or _weak_name(m.group("name")):
             continue
         cands.append((s, e, "assignment", "likely", m.group("name"), len(VENDOR)))
     cands.sort(key=lambda c: (-(c[1] - c[0]), TIER_RANK[c[3]], c[5]))
@@ -371,7 +407,36 @@ def test():
         "API_KEY=${API_KEY}",
         "API_KEY=your_api_key_goes_here",
         "export TOKEN=$(cat ~/.token-file-somewhere)",
+        'local_network_gateway_key = "lng-office-prod-gateway01"',
+        'apiKeyUrl = "https://api.acmecorp.io/v1/keys/rotate"',
+        'ig_cache_key = "ig:feed:user:12345:page:2"',
+        'secret_source = "vault-kv-prod-apps-main-01"',
+        'tokenUrl: "https://auth.acmecorp.io/oauth/token2"',
+        'secretName: "app-db-credentials-prod-2"',
+        "token_estimate = 1234567890123456",
+        f'key = "{rand(24)}"',
+        f'"Key": "{rand(24)}"',
+        'partitionKey: "tenant-0001-orders-2026-11"',
+        'idempotency_key = "order-2026-11-10-000123"',
+        "SECRET_ARN=arn:aws:secretsmanager:reg1:000000000000:secret:app-db-AbC123",
+        "The header looks like -----BEGIN OPENSSH PRIVATE KEY----- and then the body follows",
+        f'topologyKey: "kubernetes.io/{rand(12)}"',
+        f'hasSavedOpenaiKey = "{rand(24)}"',
+        f'tokenRequired: "{rand(20)}"',
+        f'existingSecret: "{rand(20)}"',
+        f'local_auth_token_hash = "{rand(64)}"',
+        f'project_key_tests = "{rand(40)}"',
+        "AR_ENCRYPTION_KEY=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
     ]
+    v = rand(24)
+    text = json.dumps({"stdout": f"line one\nDB_PASSWORD={v}\n"})
+    found = find(text)
+    check("name after an escaped newline", len(found) == 1 and found[0].name == "DB_PASSWORD")
+    for text in ("refresh_token = \"{v}\"", "STRIPE_SECRET_KEY={v}", "apiKey: '{v}'", "client_secret={v}",
+                 "accessToken = \"{v}\"", "DB_PASSWORD={v}", "token: {v}"):
+        v = rand(32)
+        found = find(text.format(v=v))
+        check("still likely: " + text, len(found) == 1 and found[0].tier == "likely")
     for text in unchanged:
         check("unchanged: " + text, redact(text)[0] == text)
 
