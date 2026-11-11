@@ -14,6 +14,7 @@ import random
 import re
 import string
 import sys
+import time
 from collections import namedtuple
 
 Finding = namedtuple("Finding", "kind tier start end fp name")
@@ -186,8 +187,19 @@ def _source_values(path):
     return out
 
 
-def load_known(cfg, cache=CACHE_PATH, home=None):
-    """{sha256 hex: variable name} of values on this machine. The cache holds hashes only."""
+def load_known(cfg, cache=CACHE_PATH, home=None, max_age=None):
+    """{sha256 hex: variable name} of values on this machine. The cache holds hashes only.
+
+    With max_age (seconds), a cache younger than that is used as is, without walking the
+    source folders: hooks run on every tool call and the walk takes most of a second.
+    """
+    if max_age is not None:
+        try:
+            if time.time() - os.stat(cache).st_mtime < max_age:
+                with open(cache) as f:
+                    return _known_from(json.load(f))
+        except (OSError, ValueError, TypeError):
+            pass
     try:
         with open(cache) as f:
             stored = json.load(f)
@@ -211,8 +223,12 @@ def load_known(cfg, cache=CACHE_PATH, home=None):
             json.dump(fresh, f)
         os.chmod(tmp, 0o600)
         os.replace(tmp, cache)
+    return _known_from(fresh)
+
+
+def _known_from(entries):
     known = Known()
-    for entry in fresh.values():
+    for entry in entries.values():
         for h, (name, length) in entry["values"].items():
             known[h] = name
             known.lengths.add(length)
@@ -536,6 +552,18 @@ def test_known(check):
         known = load_known(cfg, cache=cache, home=home)
         check("refresh: new", hashlib.sha256(fresh.encode()).hexdigest() in known)
         check("refresh: old gone", h not in known)
+
+        os.utime(cache, None)
+        real_sources = known_sources
+        globals()["known_sources"] = lambda *a, **k: (_ for _ in ()).throw(AssertionError("walked"))
+        try:
+            quick = load_known(cfg, cache=cache, home=home, max_age=600)
+            check("max_age: no walk, same values", hashlib.sha256(fresh.encode()).hexdigest() in quick
+                  and quick.lengths == known.lengths)
+        except AssertionError:
+            check("max_age: no walk", False)
+        finally:
+            globals()["known_sources"] = real_sources
 
         bad_cfg = os.path.join(tmp, "config.json")
         with open(bad_cfg, "w") as f:
