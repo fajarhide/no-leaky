@@ -1,6 +1,6 @@
 ---
 name: no-leaky-data
-description: Use when output shows tokens like [email: k3f9a01c27b4], when working with customer, user or personal data (emails, phone numbers, national IDs, card numbers, internal hosts or client names), or when a prompt was held for holding personal data.
+description: "Use when output shows tokens like [email: k3f9a01c27b4], when working with customer, user or personal data (emails, phone numbers, national IDs, card numbers, internal hosts or client names), or when a prompt was held for holding personal data."
 ---
 
 # no-leaky-data
