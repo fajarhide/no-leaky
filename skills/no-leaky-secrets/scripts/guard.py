@@ -80,6 +80,11 @@ ADVICE = (
 
 
 def deny_message(hit):
+    if hit.startswith("git add "):
+        return (f"Blocked: `{hit}` would put a credential source into git history, which keeps it "
+                "after the file is deleted and travels with every clone and push. Add it to .gitignore "
+                "and commit a .env.example with dummy values instead. If this is a false alarm, say so "
+                "and ask the user to run it with `!`.")
     return f"Blocked: this would print a credential source ({hit}) into the transcript. {ADVICE}"
 
 
@@ -186,6 +191,11 @@ def check_pipeline(stages, depth):
             continue
         if stage[0] == "sed" and any(t.startswith("-i") for t in stage):
             continue
+        # Staging a credential file is a leak that outlives the session.
+        if stage[0] == "git" and len(stage) > 1 and stage[1] == "add":
+            for t in stage[2:]:
+                if is_source(t):
+                    return "git add " + t
         # `git show REV:path` and `git cat-file -p REV:path` print a file from history.
         if stage[0] == "git" and len(stage) > 1 and stage[1] in ("show", "cat-file"):
             for t in stage[2:]:
@@ -332,6 +342,12 @@ def test():
         "git show HEAD:.env",
         "git show abc123:config/.env.production",
         "git cat-file -p HEAD:.env",
+        "git add .env",
+        "git add -f config/.env.production",
+        "cd app && git add src/main.py .env.local",
+        "git add ~/.ssh/id_ed25519",
+        "infisical run -- env",
+        "doppler run -- printenv",
     ]
     allowed = [
         ". ~/.my-token",
@@ -369,8 +385,14 @@ def test():
         "git show HEAD:README.md",
         "git show HEAD --stat",
         "cat *.md",
+        "git add .env.example",
+        "git add src/app.py .gitignore",
+        "git add -A",
+        "git commit -m 'stop tracking .env'",
     ]
     bad = [c for c in denied if not check_command(c, cfg)] + [c for c in allowed if check_command(c, cfg)]
+    if "git history" not in deny_message(check_command("git add .env", cfg) or ""):
+        bad.append("git add denial names git history")
 
     with tempfile.TemporaryDirectory() as tmp:
         script = os.path.join(tmp, "backup-knowledge.sh")

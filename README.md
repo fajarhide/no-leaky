@@ -1,5 +1,17 @@
 # no-leaky
 
+Ask developers whether their coding agent may read `.env` and the answers split down the middle. In a poll of about 60 developers in November 2026, half said no. The other half said yes, as long as production values are different. Almost nobody named anything that makes either answer true.
+
+| What people rely on | Why it fails | What no-leaky does |
+| --- | --- | --- |
+| "I told it not to read it" | A rule in the prompt is a request. Agents `cat .env` while debugging something else. | `guard.py` denies the read before it runs. |
+| "Are you sure it never did?" | Nobody is, without reading the tool calls. | `scan.py` reads past transcripts and lists every secret that went through, by fingerprint. |
+| "Prod values are different" | Until one prod key gets copied into a local file to reproduce a bug. | Every value in an `.env` file on this machine is known by hash, so that key is caught wherever it turns up later. |
+| "The app sources the env, the agent never sees it" | Until a stack trace prints the config. | `filter.py` redacts secrets in Bash, Read and Grep output. |
+| "We use a secret manager" | An agent that can run `infisical run -- env` holds the secret too. | The guard denies env dumps: `printenv`, `env`, `export -p`, `/proc/*/environ`. |
+| "I tell it to forget afterwards" | Forgetting is a chat feature. The provider already has the value. | Stop it before the model. For what already went through, the scan says what to rotate. |
+| "It only reads, it never commits" | `git add .env` puts it in history, which outlives the file. | The guard denies staging credential files. |
+
 Coding agents print secrets while they work on something else. They `cat .env` to check a setting, `docker inspect` a broken container, run `ps aux`, or read a diff that holds a key somebody committed. The value lands in the transcript, and from there in backups, shared sessions and the provider's logs. Nothing breaks, so nobody notices.
 
 On one developer's machine, 362 Claude Code transcripts from six weeks held 35 distinct secrets across 28 projects. 25 were real keys; the other 10 were public by design.
@@ -36,7 +48,7 @@ Options: `--agent claude|codex|gemini`, `--since YYYY-MM-DD`, `--session FILE`, 
 
 | Hook | Event | What it does |
 | --- | --- | --- |
-| `guard.py` | PreToolUse on Bash, Read, Grep | Denies a command that would print a credential source (`.env`, token files, private keys, `printenv`, `docker inspect`, `ps aux`, `crontab -l`, `gh auth token`, `kubectl get secret -o`). It decides by where the bytes come from, never by what they look like. The denial gives the safe way to do the same thing. |
+| `guard.py` | PreToolUse on Bash, Read, Grep | Denies a command that would print a credential source (`.env`, token files, private keys, `printenv`, `docker inspect`, `ps aux`, `crontab -l`, `gh auth token`, `kubectl get secret -o`), and `git add` of a credential file. It decides by where the bytes come from, never by what they look like. The denial gives the safe way to do the same thing. |
 | `filter.py` | PostToolUse on Bash, Read, Grep | Replaces any secret that still got through with `[secret: <kind>, fp <8 hex>]` and leaves the rest of the output alone. |
 | `prompt_guard.py` | UserPromptSubmit | Holds back a message you typed that carries a secret. Start it with `secret-ok:` to send it anyway. |
 
