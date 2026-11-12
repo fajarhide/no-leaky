@@ -14,6 +14,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = ("Bash", "Read", "Grep")
+FILTER_TOOLS = TOOLS + ("mcp__.*",)  # MCP output is rewritable too (measured), so the filter covers it
 OURS = ("guard.py", "filter.py", "prompt_guard.py")
 REPORT = "no-leaky-report.md"
 
@@ -34,15 +35,15 @@ def _ours(command, script=None):
     return any(os.path.join(HERE, n) in _tokens(command) for n in names)
 
 
-def _overlaps(matcher):
+def _overlaps(matcher, tools=TOOLS):
     import re
     """The subset of TOOLS a hook matcher fires on."""
     if matcher in (None, "", "*"):
-        return set(TOOLS)
+        return set(tools)
     try:
-        return {t for t in TOOLS if re.fullmatch(matcher, t)}
+        return {t for t in tools if re.fullmatch(matcher, t)}
     except re.error:
-        return {t for t in TOOLS if t in matcher}
+        return {t for t in tools if t in matcher}
 
 
 def _commands(groups):
@@ -65,7 +66,7 @@ def install(s, no_wrap=()):
     post = hooks.setdefault("PostToolUse", [])
     covered = set()
     for g in post:
-        tools = _overlaps(g.get("matcher"))
+        tools = _overlaps(g.get("matcher"), FILTER_TOOLS)
         if not tools:
             continue
         for h in g.get("hooks", []):
@@ -76,7 +77,7 @@ def install(s, no_wrap=()):
                 h["command"] = _cmd("filter.py", "--after", h["command"])
                 changes.append(f"PostToolUse: {g.get('matcher')!r} hook now runs through filter.py --after")
             covered |= tools
-    missing = [t for t in TOOLS if t not in covered]
+    missing = [t for t in FILTER_TOOLS if t not in covered]
     if missing:
         post.append({"matcher": "|".join(missing), "hooks": [{"type": "command", "command": _cmd("filter.py")}]})
         changes.append(f"PostToolUse: added filter.py on {'|'.join(missing)}")
@@ -240,8 +241,9 @@ def test():
         check("other rewriter wrapped in place", post[0]["matcher"] == "Bash|Read|Grep|WebFetch"
               and "filter.py" in wrapped and shlex.split(wrapped)[-2:] == ["--after", other_post])
         check("unrelated post hook untouched", post[1]["hooks"][0]["command"] == "fmt-hook")
-        check("no separate filter entry when wrapped",
-              sum("filter.py" in h["command"] for g in post for h in g["hooks"]) == 1)
+        check("only MCP gets its own filter entry when the rest is wrapped",
+              [g["matcher"] for g in post if any("filter.py" in h["command"] and "--after" not in h["command"]
+                                                 for h in g["hooks"])] == ["mcp__.*"])
         check("prompt guard added", any("prompt_guard.py" in h["command"] for g in hooks["UserPromptSubmit"] for h in g["hooks"]))
         check("other keys kept", s["env"] == {"SOME_FLAG": "1"})
 
@@ -272,7 +274,7 @@ def test():
         with open(os.path.join(bare, "settings.json")) as f:
             s = json.load(f)
         check("env config dir used, filter added on its own",
-              any(g.get("matcher") == "Bash|Read|Grep" and "filter.py" in g["hooks"][0]["command"]
+              any(g.get("matcher") == "Bash|Read|Grep|mcp__.*" and "filter.py" in g["hooks"][0]["command"]
                   for g in s["hooks"]["PostToolUse"]))
 
         partial = os.path.join(tmp, "partial")
@@ -289,7 +291,7 @@ def test():
         post = s["hooks"]["PostToolUse"]
         check("partial overlap: Bash wrapped", "filter.py" in post[0]["hooks"][0]["command"])
         check("partial overlap: Read and Grep get their own filter",
-              any(g.get("matcher") == "Read|Grep" and "filter.py" in g["hooks"][0]["command"] for g in post))
+              any(g.get("matcher") == "Read|Grep|mcp__.*" and "filter.py" in g["hooks"][0]["command"] for g in post))
         check("symlink kept", os.path.islink(os.path.join(partial, "settings.json")))
         bk = [n for n in os.listdir(partial) if "no-leaky-backup" in n]
         check("backup keeps 0600", bk and (os.stat(os.path.join(partial, bk[0])).st_mode & 0o777) == 0o600)
@@ -320,7 +322,7 @@ def test():
             post = json.load(f)["hooks"]["PostToolUse"]
         check("no-wrap: hook left as is", post[0]["hooks"][0]["command"] == "status-hook --pid")
         check("no-wrap: filter added on its own",
-              any(g.get("matcher") == "Bash|Read|Grep" and "filter.py" in g["hooks"][0]["command"] for g in post))
+              any(g.get("matcher") == "Bash|Read|Grep|mcp__.*" and "filter.py" in g["hooks"][0]["command"] for g in post))
 
         with open(settings, "w") as f:
             f.write(raw)

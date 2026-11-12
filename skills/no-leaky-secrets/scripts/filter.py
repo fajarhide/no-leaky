@@ -48,7 +48,8 @@ def _redact_tree(x, known, found, cfg=None, key=None, pairs=None):
 def rewrite(payload, known, cfg=None, key=None, vault_path=None):
     """The hook output that replaces secrets (and, with cfg and key, personal data) in this tool response,
     or None when nothing changes."""
-    if payload.get("tool_name") not in TOOLS:
+    name = payload.get("tool_name") or ""
+    if name not in TOOLS and not name.startswith("mcp__"):
         return None
     path = (payload.get("tool_input") or {}).get("file_path") or ""
     if path and detect.is_fixture_path(path):
@@ -253,6 +254,12 @@ def test():
                   tool_response=dict(read["tool_response"], file=dict(read["tool_response"]["file"], content=email)))
         check("data: fixture left alone", rewrite(fx, {}, dcfg, dkey, vpath) is None)
         check("data: secret only unchanged", rewrite(bash, {}, dcfg, dkey, vpath) == rewrite(bash, {}))
+
+        mcp = {"hook_event_name": "PostToolUse", "tool_name": "mcp__db__query", "tool_input": {"sql": "select 1"},
+               "tool_response": [{"type": "text", "text": f"customer {email} plan gold"}]}
+        out = rewrite(mcp, {}, dcfg, dkey, vpath)
+        check("data: MCP output tokenized", out and email not in json.dumps(out)
+              and "[email: k" in out["hookSpecificOutput"]["updatedToolOutput"][0]["text"])
 
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
