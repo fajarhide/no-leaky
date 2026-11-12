@@ -407,6 +407,9 @@ def test():
             key, _, val = line.partition(": ")
             if val and not val.startswith(('"', "'")) and (": " in val or " #" in val):
                 bad.append(f"{os.path.basename(os.path.dirname(f))} SKILL.md {key} needs quotes")
+        # !`...` in a skill body is a shell command Claude Code runs when the skill loads.
+        if "!`" in open(f).read():
+            bad.append(f"{os.path.basename(os.path.dirname(f))} SKILL.md holds a !` command directive")
 
     if bad:
         print("WRONG:", *bad, sep="\n  ")

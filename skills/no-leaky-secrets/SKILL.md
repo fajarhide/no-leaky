@@ -42,7 +42,7 @@ Rules behind the table:
 
 ## When the guard blocks a command
 
-The denial names the source and the safe way. Take the safe way. Do not retry with another filter or another reader. If you think it is a false alarm, say so in one line and ask the user to run the command themselves with `!`.
+The denial names the source and the safe way. Take the safe way. Do not retry with another filter or another reader. If you think it is a false alarm, say so in one line and ask the user to run the command themselves in Claude Code's shell mode (they type an exclamation mark, then the command).
 
 ## When a secret already appeared
 

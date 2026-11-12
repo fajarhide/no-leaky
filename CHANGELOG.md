@@ -7,6 +7,7 @@ version adds features and may change hook behavior, a patch version only fixes.
 
 ### Fixed
 - `no-leaky-data` was skipped by `npx skills add`: its SKILL.md description held `: ` unquoted, which is not valid YAML. The installer self-check now fails on any SKILL.md front matter that would not parse.
+- `no-leaky-secrets` SKILL.md held an exclamation mark followed by a backtick, which skill scanners and Claude Code read as a shell command directive. Reworded; the self-check now fails on that pattern in any SKILL.md.
 
 ## [0.2.0] - 2026-11-13
 
