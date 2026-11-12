@@ -169,7 +169,7 @@ def _scan_file(job):
             for f in detect.find(text, known):
                 rows.add((f.fp, f.kind, f.tier, f.name, sid, date, route))
             for f in data.find_data(text, dcfg, key):
-                rows.add((f.token[-9:-1], f.kind, "data", "", sid, date, route))
+                rows.add((f.token[-13:-1], f.kind, "data", "", sid, date, route))
     except OSError:
         stats["bad_lines"] += 1
     return rows, stats["bad_lines"]
@@ -443,7 +443,7 @@ def test():
         with contextlib.redirect_stdout(out):
             code = main(["--session", sess, "--report", report], cfg=cfg, home=home, config_dir=cfgdir, key=dkey)
         rep = open(report).read()
-        tokhex = data.token("nik", nik, dkey)[-9:-1]
+        tokhex = data.token("nik", nik, dkey)[-13:-1]
         check("data section", "## Personal and business data (1)" in rep)
         check("data row names kind, route and token", any(l.startswith("| nik |") and "Bash: sqlite3" in l and tokhex in l
                                                           for l in rep.splitlines()))

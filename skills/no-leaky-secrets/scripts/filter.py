@@ -27,25 +27,34 @@ LOG = os.path.expanduser("~/.cache/no-leaky/filter.log")
 SECRET_MARK = re.compile(r"\[secret: [^\]\n]*\]")
 
 
-def _redact_tree(x, known, found, cfg=None, key=None, pairs=None):
-    """Secrets first, then personal data as tokens. pairs collects {token: value} for the vault."""
+def _redact_tree(x, known, found):
     if isinstance(x, str):
         new, hits = detect.redact(x, known)
         found.extend(f for f in hits if f.tier != "public")
-        if cfg is not None and key:
-            skip = [m.span() for m in SECRET_MARK.finditer(new)]
-            new, dfound, p = data.tokenize(new, cfg, key, skip)
-            found.extend(dfound)
-            pairs.update(p)
         return new
     if isinstance(x, list):
-        return [_redact_tree(i, known, found, cfg, key, pairs) for i in x]
+        return [_redact_tree(i, known, found) for i in x]
     if isinstance(x, dict):
-        return {k: _redact_tree(v, known, found, cfg, key, pairs) for k, v in x.items()}
+        return {k: _redact_tree(v, known, found) for k, v in x.items()}
     return x
 
 
-def rewrite(payload, known, cfg=None, key=None, vault_path=None):
+def _tokenize_tree(x, cfg, key, found, pairs):
+    """Personal data as tokens, on output whose secrets are already redacted (their markers are skipped)."""
+    if isinstance(x, str):
+        skip = [m.span() for m in SECRET_MARK.finditer(x)]
+        new, dfound, p = data.tokenize(x, cfg, key, skip)
+        found.extend(dfound)
+        pairs.update(p)
+        return new
+    if isinstance(x, list):
+        return [_tokenize_tree(i, cfg, key, found, pairs) for i in x]
+    if isinstance(x, dict):
+        return {k: _tokenize_tree(v, cfg, key, found, pairs) for k, v in x.items()}
+    return x
+
+
+def rewrite(payload, known, cfg=None, key=None, vault_path=None, log=None):
     """The hook output that replaces secrets (and, with cfg and key, personal data) in this tool response,
     or None when nothing changes."""
     name = payload.get("tool_name") or ""
@@ -54,12 +63,25 @@ def rewrite(payload, known, cfg=None, key=None, vault_path=None):
     path = (payload.get("tool_input") or {}).get("file_path") or ""
     if path and detect.is_fixture_path(path):
         return None
-    found, pairs = [], {}
-    resp = _redact_tree(payload.get("tool_response"), known, found, cfg, key, pairs)
+    found = []
+    resp = _redact_tree(payload.get("tool_response"), known, found)
+    if cfg is not None and key:
+        # The data step runs on the secret-redacted copy; if it fails, the secrets-only result still stands.
+        try:
+            dfound, pairs = [], {}
+            tokenized = _tokenize_tree(resp, cfg, key, dfound, pairs)
+            resp, found = tokenized, found + dfound
+            if pairs:
+                try:
+                    vault.remember(pairs, vault_path or vault.VAULT_PATH)
+                except Exception as e:  # tokens still hide the values; only nl-run loses them
+                    if log:
+                        _log(f"vault {type(e).__name__}", log)
+        except Exception as e:
+            if log:
+                _log(f"data {type(e).__name__}", log)
     if not found:
         return None
-    if pairs:
-        vault.remember(pairs, vault_path or vault.VAULT_PATH)
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": resp}}
 
 
@@ -114,8 +136,11 @@ def run(raw, known=None, log=LOG, after=None, timeout=50, cfg=None, key=None, va
         if known is None:
             known = detect.load_known(cfg, max_age=600)
         if key is None:
-            key = data.load_key()
-        ours = rewrite(dict(payload, tool_response=base), known, cfg, key, vault_path)
+            try:
+                key = data.load_key()
+            except Exception as e:  # no key: secrets are still redacted, data is not
+                _log(f"{tool} key {type(e).__name__}", log)
+        ours = rewrite(dict(payload, tool_response=base), known, cfg, key, vault_path, log)
         if ours and their is not None:
             their.setdefault("hookSpecificOutput", {}).update(ours["hookSpecificOutput"])
             json.dump(their, sys.stdout)
@@ -254,6 +279,27 @@ def test():
                   tool_response=dict(read["tool_response"], file=dict(read["tool_response"]["file"], content=email)))
         check("data: fixture left alone", rewrite(fx, {}, dcfg, dkey, vpath) is None)
         check("data: secret only unchanged", rewrite(bash, {}, dcfg, dkey, vpath) == rewrite(bash, {}))
+
+        # review 1: a broken data path must not switch secret redaction off
+        real_remember, real_tokenize, real_load = vault.remember, data.tokenize, data.load_key
+
+        def broken(*a, **k):
+            raise OSError("disk full")
+        for label, patch in (("vault fails", ("remember",)), ("tokenize fails", ("tokenize",)), ("key fails", ("load_key",))):
+            vault.remember = broken if "remember" in patch else real_remember
+            data.tokenize = broken if "tokenize" in patch else real_tokenize
+            data.load_key = broken if "load_key" in patch else real_load
+            stdout = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(stdout):
+                    run(json.dumps(mixed), known={}, log=log, cfg=dcfg, key=None if "load_key" in patch else dkey,
+                        vault_path=vpath)
+            finally:
+                vault.remember, data.tokenize, data.load_key = real_remember, real_tokenize, real_load
+            got = stdout.getvalue()
+            check(f"{label}: secret still redacted", "[secret: github" in got and key not in got)
+            if label == "vault fails":
+                check(f"{label}: data still tokenized", "[email: k" in got and email not in got)
 
         mcp = {"hook_event_name": "PostToolUse", "tool_name": "mcp__db__query", "tool_input": {"sql": "select 1"},
                "tool_response": [{"type": "text", "text": f"customer {email} plan gold"}]}

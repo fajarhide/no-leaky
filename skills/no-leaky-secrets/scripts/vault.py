@@ -14,7 +14,7 @@ import time
 
 VAULT_PATH = os.path.expanduser("~/.cache/no-leaky/vault.json")
 TTL = 7 * 86400
-TOKEN_RE = re.compile(r"\[(?:email|phone|nik|npwp|card|ip|account|name): k[0-9a-f]{8}\]")
+TOKEN_RE = re.compile(r"\[(?:email|phone|nik|npwp|card|ip|account|name): k[0-9a-f]{12}\]")
 
 
 def _load(path):
@@ -75,7 +75,7 @@ def resolve(text, path=VAULT_PATH, now=None):
 def _writer(path, prefix, start):
     time.sleep(max(0.0, start - time.time()))  # all writers start together
     for i in range(50):
-        remember({f"[email: k{prefix}{i:07x}]": f"v{prefix}{i}"}, path)
+        remember({f"[email: k{prefix}{i:011x}]": f"v{prefix}{i}"}, path)
 
 
 def test():
@@ -90,13 +90,13 @@ def test():
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "cache", "vault.json")
-        t1, t2 = "[email: k0000aaaa]", "[phone: k0000bbbb]"
+        t1, t2 = "[email: k0000aaaa1111]", "[phone: k0000bbbb1111]"
         remember({t1: "first value", t2: "second value"}, path, now=1000)
         text, missing = resolve(f"x {t1} y {t2} z", path, now=1000)
         check("round trip", text == "x first value y second value z" and missing == [])
         check("mode 0600", (os.stat(path).st_mode & 0o777) == 0o600)
 
-        unknown = "[nik: k0000cccc]"
+        unknown = "[nik: k0000cccc1111]"
         text, missing = resolve(f"a {unknown}", path, now=1000)
         check("unknown kept and listed", text == f"a {unknown}" and missing == [unknown])
 
@@ -104,8 +104,8 @@ def test():
         text, missing = resolve(f"{t1} {t2}", path, now=1000 + 8 * 86400)
         check("seen again stays, unseen expires", text.startswith("first value") and missing == [t2])
 
-        check("TOKEN_RE", TOKEN_RE.findall(f"{t1}, [card: k1234abcd] [secret: openai, fp 1a2b3c4d]")
-              == [t1, "[card: k1234abcd]"])
+        check("TOKEN_RE", TOKEN_RE.findall(f"{t1}, [card: k1234abcd5678] [secret: openai, fp 1a2b3c4d]")
+              == [t1, "[card: k1234abcd5678]"])
 
         shared = os.path.join(tmp, "shared.json")
         start = time.time() + 0.2
@@ -114,7 +114,7 @@ def test():
             w.start()
         for w in writers:
             w.join()
-        toks = " ".join(f"[email: k{p}{i:07x}]" for p in "abcdef01" for i in range(50))
+        toks = " ".join(f"[email: k{p}{i:011x}]" for p in "abcdef01" for i in range(50))
         check("test tokens are real tokens", len(TOKEN_RE.findall(toks)) == 400)
         _, missing = resolve(toks, shared)
         check(f"concurrent writers keep all 400 ({400 - len(missing)} kept)", missing == [])

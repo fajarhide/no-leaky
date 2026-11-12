@@ -166,13 +166,13 @@ Secrets are not the only thing an agent sends to its provider. A query, a log li
 
 ```
 $ sqlite3 shop.db "select id, email, phone, nik from users where id = 4411"
-4411|[email: k3f9a01c]|[phone: k0c5d9a2]|[nik: k5e21b7f]
+4411|[email: k3f9a01c27b4]|[phone: k0c5d9a2e3f8]|[nik: k5e21b7f04a6]
 ```
 
 The token is an HMAC of the value under a key that never leaves your machine, so the same customer gets the same token everywhere and nobody holding the token can work back to the value. The agent still acts on it through `nl-run`, which swaps the value in inside its own process:
 
 ```sh
-nl-run -- sqlite3 shop.db "select id, status from orders where email = '[email: k3f9a01c]'"
+nl-run -- sqlite3 shop.db "select id, status from orders where email = '[email: k3f9a01c27b4]'"
 ```
 
 Detected: emails, phone numbers (`+` international and Indonesian `08`), NIK, NPWP, card numbers (Luhn), IPv4 addresses, AWS account IDs, and the names you list. A pasted prompt holding them is held back like a secret, and the scan reports them in their own section.
@@ -183,7 +183,7 @@ Detected: emails, phone numbers (`+` international and Indonesian `08`), NIK, NP
 
 Measured on Claude Code 2.1.322:
 
-- The output filter covers Bash, Read and Grep. WebFetch and MCP tools are not filtered yet.
+- The output filter covers Bash, Read, Grep and MCP tools. WebFetch is not filtered yet.
 - A blocked prompt never reaches the model, but Claude Code still writes one copy into the local transcript.
 - A running session does not pick up new hooks. They take effect in the next one.
 - Asking how a process was started fails: `ps` with arguments is denied, and the agent may then wrongly report the process is not running. 3 of 3 in the bench.
@@ -192,7 +192,9 @@ Measured on Claude Code 2.1.322:
 - Landline numbers written without `+` are not detected.
 - A client name inside a path, URL or git remote stays readable, so `cd` and `git` keep working. It still reaches the provider.
 - Edit cannot use a token: Claude Code compares an Edit against the file before any hook runs. The agent edits such a line with `nl-run` and a script.
-- `nl-run` refusing network tools is best effort. A script file that opens a connection itself, or a database client pointed at a remote host, still sends resolved values.
+- `nl-run` refusing network tools is a speed bump against a prompt-injected agent, not a sandbox. It sees through `env`, `timeout`, `sudo`, `xargs`, `bash -lc`, `/dev/tcp` and DNS lookups, but a script file that opens a connection itself, or a database client pointed at a remote host, still sends resolved values.
+- What `nl-run` prints comes back with the values it resolved turned into tokens. A value the command transforms first (base64, upper case, split up) is not recognized.
+- The vault in `~/.cache/no-leaky/vault.json` holds the values behind tokens in plain text, mode 0600, for 7 days after they were last seen. Keep it out of backups you share.
 - Data detection makes a full scan about 40% slower. The scan uses half the cores at low priority so the machine stays usable.
 - The likely tier is noisy: 153 rows on the author's machine, each to be checked by hand before you rotate anything. An entropy cutoff was measured and separated real keys from code no better.
 - A first scan of about 4 GB of transcripts takes about two minutes. The goal was one.

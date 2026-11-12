@@ -33,7 +33,7 @@ DIGITS16 = re.compile(r"(?<![\w-])\d{16}(?![\w-])")
 NPWP_FMT = re.compile(r"(?<!\d)\d{2}\.\d{3}\.\d{3}\.\d-\d{3}\.\d{3}(?!\d)")
 NPWP_BARE = re.compile(r"(?<![\w-])\d{15,16}(?![\w-])")
 CARD = re.compile(r"(?<![\w-])(?:\d{13,19}|\d{4}(?:[ -]\d{4}){2}[ -]\d{1,7}|\d{4}[ -]\d{6}[ -]\d{4,5})(?![\w-])")
-IP = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.]|\.\d)")
+IP = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\d|\.\d)")
 ACCOUNT = re.compile(r"(?<![\w-])\d{12}(?![\w-])")
 ACCOUNT_NEAR = re.compile(r"(?i)arn:|account|owner")
 LONG_DIGITS = re.compile(r"\d{7}|\d{3,4}[ -]\d{3,4}[ -]\d{3,4}|\+\d|\d{4}[ -]\d{6}|\d{3}\.\d-\d{3}")
@@ -45,23 +45,36 @@ CARD_PREFIX = re.compile(r"^(?:4|5[1-5]|2(?:22[1-9]|2[3-9]\d|[3-6]\d\d|7[01]\d|7
 DOC_NETS = ("192.0.2.", "198.51.100.", "203.0.113.")
 
 
+def _read_key(path):
+    with open(path, "rb") as f:
+        key = f.read()
+    if len(key) != 32:
+        raise ValueError(f"no-leaky: {path} is damaged; delete it to make a new one")
+    return key
+
+
 def load_key(path=KEY_PATH):
-    """The local HMAC key, created on first use with mode 0600."""
+    """The local HMAC key, created on first use with mode 0600. A damaged key raises instead of turning
+    protection off quietly."""
     try:
-        with open(path, "rb") as f:
-            return f.read()
+        return _read_key(path)
     except FileNotFoundError:
         pass
+    import tempfile
     os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-    key = os.urandom(32)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))  # 0600
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        with open(path, "rb") as f:
-            return f.read()
-    with os.fdopen(fd, "wb") as f:
-        f.write(key)
-    return key
+        with os.fdopen(fd, "wb") as f:
+            f.write(os.urandom(32))
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp, path)  # atomic and never overwrites: a reader sees no key or a whole one
+        except FileExistsError:
+            pass
+    finally:
+        os.unlink(tmp)
+    return _read_key(path)
 
 
 def normalize(kind, value):
@@ -76,7 +89,7 @@ def normalize(kind, value):
 
 
 def token(kind, value, key):
-    h = hmac.new(key, normalize(kind, value).encode(), hashlib.sha256).hexdigest()[:8]
+    h = hmac.new(key, normalize(kind, value).encode(), hashlib.sha256).hexdigest()[:12]
     return f"[{kind}: k{h}]"
 
 
@@ -95,6 +108,25 @@ def _nik(d):
         return False
     day, month = int(d[6:8]), int(d[8:10])
     return (1 <= day <= 31 or 41 <= day <= 71) and 1 <= month <= 12
+
+
+TARGET_WORDS = {"ssh", "scp", "sftp", "mosh", "ping", "ping6", "telnet", "nc", "ncat", "host", "hostname", "curl",
+                "wget", "dig", "nslookup", "traceroute", "mtr", "rsync", "psql", "mysql", "redis-cli"}
+
+
+def _target(text, s):
+    """True when the word before the token holding the match is a command that connects to it (owner decision:
+    command targets stay readable so ssh and curl keep working)."""
+    a = s
+    while a > 0 and not text[a - 1].isspace():
+        a -= 1
+    b = a
+    while b > 0 and text[b - 1].isspace() and text[b - 1] != "\n":
+        b -= 1
+    end = b
+    while b > 0 and not text[b - 1].isspace():
+        b -= 1
+    return os.path.basename(text[b:end].strip("$#>`'\"(").lower()) in TARGET_WORDS
 
 
 def _in_path(text, s, e):
@@ -126,7 +158,7 @@ def _emails(text):
         local, domain, tld = m.group(1), m.group(2).lower(), m.group(3).lower()
         if tld in SKIP_TLD or domain in SKIP_DOMAIN or local.lower().startswith(("noreply", "no-reply")):
             continue
-        if text[m.end():m.end() + 1] == ":":  # git@host:org/repo is a remote, not an address
+        if re.match(r":[\w~./-]", text[m.end():m.end() + 2]):  # git@host:org/repo is a remote, not an address
             continue
         yield "email", m.start(), m.end()
 
@@ -172,7 +204,7 @@ def _ips(text):
         before = text[max(0, m.start() - 10):m.start()]
         if before[-1:] in ("v", "V", "@") or VERSION_NEAR.search(before):
             continue
-        if not _in_path(text, m.start(), m.end()):
+        if not _in_path(text, m.start(), m.end()) and not _target(text, m.start()):
             yield "ip", m.start(), m.end()
 
 
@@ -181,7 +213,7 @@ def _names(text, cfg):
         if not name:
             continue
         for m in re.finditer(r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])", text, re.I):
-            if not _in_path(text, m.start(), m.end()):
+            if not _in_path(text, m.start(), m.end()) and not _target(text, m.start()):
                 yield "name", m.start(), m.end()
 
 
@@ -251,11 +283,11 @@ def test():
 
     key = os.urandom(32)
     cfg = dict(detect.DEFAULT_CONFIG, internal_names=["orgx"])
-    tok = re.compile(r"^\[(email|phone|nik|npwp|card|ip|account|name): k[0-9a-f]{8}\]$")
+    tok = re.compile(r"^\[(email|phone|nik|npwp|card|ip|account|name): k[0-9a-f]{12}\]$")
     v = {k: fake_data(k) for k in ("email", "phone", "nik", "npwp", "card", "ip", "account")}
 
     text = (f"contact {v['email']} or {v['phone']}, nik {v['nik']}, npwp {v['npwp']}, card {v['card']}, "
-            f"host {v['ip']} refused, arn:aws:iam::{v['account']}:role/x, by the orgx team")
+            f"server {v['ip']} refused, arn:aws:iam::{v['account']}:role/x, by the orgx team")
     new, found, pairs = tokenize(text, cfg, key)
     check("every kind found", {f.kind for f in found} == {"email", "phone", "nik", "npwp", "card", "ip", "account", "name"})
     check("tokens well formed", all(tok.match(f.token) for f in found))
@@ -292,6 +324,21 @@ def test():
     check("prefilter skips dates", not LONG_DIGITS.search("2026-11-12T10:00:00Z took 12ms"))
     amex = "378282246310005"
     check("amex grouped found", [f.kind for f in find_data(f"amex {amex[:4]} {amex[4:10]} {amex[10:]} ok", cfg, key)] == ["card"])
+
+    # review 6, 8, 9
+    ip = v["ip"]
+    check("ip at a sentence end found", [f.kind for f in find_data(f"connect to {ip}.", cfg, key)] == ["ip"])
+    check("email before a colon found", [f.kind for f in find_data(f"user={v['email']}: login failed", cfg, key)] == ["email"])
+    for target in (f"ssh {ip}", f"Host {ip}", "ping orgx-db", f"curl {ip}:8080"):
+        check(f"command target left alone: {target}", find_data(target, cfg, key) == [])
+    with __import__("tempfile").TemporaryDirectory() as tmp:
+        empty = os.path.join(tmp, "data.key")
+        open(empty, "w").close()
+        try:
+            load_key(empty)
+            check("short key refused", False)
+        except ValueError:
+            pass
 
     owner = fake_data("email")
     allow_cfg = dict(cfg, data_allow=[owner.upper()])

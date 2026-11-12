@@ -14,7 +14,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = ("Bash", "Read", "Grep")
-FILTER_TOOLS = TOOLS + ("mcp__.*",)  # MCP output is rewritable too (measured), so the filter covers it
+FILTER_TOOLS = TOOLS + ("mcp__.*",)
+GUARD_TOOLS = TOOLS + ("Edit", "Write")  # Edit and Write: a data token must not be written into a real file  # MCP output is rewritable too (measured), so the filter covers it
 OURS = ("guard.py", "filter.py", "prompt_guard.py")
 REPORT = "no-leaky-report.md"
 BIN_DIR = os.path.expanduser("~/.local/bin")
@@ -62,9 +63,16 @@ def install(s, no_wrap=()):
     hooks = s.setdefault("hooks", {})
     changes = []
     pre = hooks.setdefault("PreToolUse", [])
-    if not any(_ours(h["command"], "guard.py") for h in _commands(pre)):
-        pre.append({"matcher": "|".join(TOOLS), "hooks": [{"type": "command", "command": _cmd("guard.py")}]})
-        changes.append("PreToolUse: added guard.py on Bash|Read|Grep")
+    guard_matcher = "|".join(GUARD_TOOLS)
+    ours = [g for g in pre if any(h.get("type") == "command" and _ours(h.get("command", ""), "guard.py")
+                                  for h in g.get("hooks", []))]
+    if not ours:
+        pre.append({"matcher": guard_matcher, "hooks": [{"type": "command", "command": _cmd("guard.py")}]})
+        changes.append(f"PreToolUse: added guard.py on {guard_matcher}")
+    for g in ours:
+        if g.get("matcher") != guard_matcher:
+            g["matcher"] = guard_matcher
+            changes.append(f"PreToolUse: guard.py now also on Edit and Write")
     post = hooks.setdefault("PostToolUse", [])
     covered = set()
     for g in post:
@@ -270,7 +278,7 @@ def test():
         hooks = s["hooks"]
         pre = [h["command"] for g in hooks["PreToolUse"] for h in g["hooks"]]
         check("old pre hook kept", "python3 /x/other-guard.py" in pre)
-        check("guard added with matcher", any(g["matcher"] == "Bash|Read|Grep" and "guard.py" in g["hooks"][0]["command"]
+        check("guard added with matcher", any(g["matcher"] == "Bash|Read|Grep|Edit|Write" and "guard.py" in g["hooks"][0]["command"]
                                              for g in hooks["PreToolUse"]))
         check("guard path absolute", all(os.path.isabs(shlex.split(c)[1]) for c in pre if "guard.py" in c))
         post = hooks["PostToolUse"]

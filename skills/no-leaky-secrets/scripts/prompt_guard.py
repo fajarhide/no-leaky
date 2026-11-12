@@ -31,7 +31,12 @@ def decide(prompt, known, cfg=None, key=None):
         return None
     hits = [f for f in detect.find(prompt, known) if f.tier != "public"]
     if not hits:
-        found = data.find_data(prompt, cfg, key) if cfg is not None and key else []
+        try:
+            found = data.find_data(prompt, cfg, key) if cfg is not None and key else []
+        except Exception:
+            found = []
+        # Names and IPs the user types are about their own infra; holding those would train secret-ok:.
+        found = [f for f in found if f.kind not in ("name", "ip")]
         if not found:
             return None
         kinds = ", ".join(sorted({f.kind for f in found}))
@@ -44,11 +49,22 @@ def decide(prompt, known, cfg=None, key=None):
         f"To send it anyway, resend starting with {PREFIX}")}
 
 
+def respond(payload, known=None):
+    """The hook's answer for one payload. A broken key never skips the secret check."""
+    cfg = detect.load_config()
+    if known is None:
+        known = detect.load_known(cfg, max_age=600)
+    try:
+        key = data.load_key()
+    except Exception:
+        key = None
+    return decide(payload.get("prompt") or "", known, cfg, key)
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
-        cfg = detect.load_config()
-        out = decide(payload.get("prompt") or "", detect.load_known(cfg, max_age=600), cfg, data.load_key())
+        out = respond(payload)
     except Exception:  # never stop the user from typing because of a guard bug
         return
     if out:
@@ -95,6 +111,18 @@ def test():
     check("owner email passes", decide(f"I am {a}", {}, dict(dcfg, data_allow=[a]), dkey) is None)
     check("data prefix passes", decide(f"secret-ok: {a}", {}, dcfg, dkey) is None)
     check("no cfg, no data check", decide(f"mail {a}", {}) is None)
+    # review 7: names and IPs the user types about their own infra are not held
+    ncfg = dict(dcfg, internal_names=["orgx"])
+    check("internal name passes", decide("please fix the orgx deploy", {}, ncfg, dkey) is None)
+    check("private ip passes", decide("why can't I ssh 10.0.0.5", {}, ncfg, dkey) is None)
+    # review 1: a key failure must not skip the secret check
+    real_load = data.load_key
+    data.load_key = lambda *x, **y: (_ for _ in ()).throw(OSError("no home"))
+    try:
+        out = respond({"prompt": f"here is my key {key}"}, known={})
+    finally:
+        data.load_key = real_load
+    check("key failure still blocks a secret", out and out.get("decision") == "block")
 
     if bad:
         print("WRONG:", *bad, sep="\n  ")

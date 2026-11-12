@@ -7,11 +7,12 @@ version adds features and may change hook behavior, a patch version only fixes.
 
 ### Added
 - `no-leaky-data` skill. Emails, phone numbers, NIK, NPWP, card numbers, IPv4 addresses, AWS account IDs and the
-  client names you list reach the agent as `[kind: k<8 hex>]` tokens, an HMAC under a key that never leaves the
+  client names you list reach the agent as `[kind: k<12 hex>]` tokens, an HMAC under a key that never leaves the
   machine.
 - `nl-run`: runs a command with tokens resolved inside its own process, so the agent uses a value it never saw.
   Network tools are refused unless every host is in `data_hosts`.
 - The output filter covers MCP tool output.
+- The guard blocks writing a data token into a file with Write or Edit (Markdown and text notes are fine).
 - The prompt guard holds a prompt carrying personal data; the scan reports data in its own section.
 - Config keys `data_allow`, `internal_names`, `data_hosts`.
 
