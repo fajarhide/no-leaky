@@ -61,7 +61,7 @@ python3 skills/no-leaky-secrets/scripts/install.py            # backs up setting
 python3 skills/no-leaky-secrets/scripts/install.py --uninstall
 ```
 
-It honors `CLAUDE_CONFIG_DIR`. If another hook already rewrites tool output on the same tools, the installer runs it through the filter (`filter.py --after '<its command>'`), because Claude Code keeps only the rewrite that finishes last.
+It honors `CLAUDE_CONFIG_DIR`. If another hook already rewrites tool output on the same tools, the installer runs it through the filter (`filter.py --after '<its command>'`), because Claude Code keeps only the rewrite that finishes last. A hook that never rewrites output does not need this, and wrapping one that reads its parent pid or is managed by another app breaks it. Leave those alone with `--no-wrap '<part of its command>'`.
 
 ## Limits
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Wire the no-leaky hooks into Claude Code settings.json, or take them out again.
 
-Usage: python3 install.py [--config-dir DIR] [--dry-run] [--uninstall]
+Usage: python3 install.py [--config-dir DIR] [--dry-run] [--uninstall] [--no-wrap TEXT ...]
 Self-check: python3 install.py --test
 """
 
@@ -49,8 +49,13 @@ def _commands(groups):
     return [h for g in groups for h in g.get("hooks", []) if h.get("type") == "command"]
 
 
-def install(s):
-    """Add the hooks to settings dict s in place. Returns a list of changes made."""
+def install(s, no_wrap=()):
+    """Add the hooks to settings dict s in place. Returns a list of changes made.
+
+    Hooks whose command contains a no_wrap substring stay as they are. Safe for hooks that never
+    rewrite output (an empty {} finishing last does not undo our rewrite), and needed for hooks
+    that read their parent pid or are rewritten by the app that owns them.
+    """
     hooks = s.setdefault("hooks", {})
     changes = []
     pre = hooks.setdefault("PreToolUse", [])
@@ -64,7 +69,7 @@ def install(s):
         if not tools:
             continue
         for h in g.get("hooks", []):
-            if h.get("type") != "command":
+            if h.get("type") != "command" or any(n in h["command"] for n in no_wrap):
                 continue
             if not _ours(h["command"], "filter.py"):
                 # Hooks on one event run in parallel and the last rewrite wins, so run theirs through ours.
@@ -136,6 +141,8 @@ def main(argv, run_tests=True):
     ap.add_argument("--config-dir")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--uninstall", action="store_true")
+    ap.add_argument("--no-wrap", action="append", default=[], metavar="TEXT",
+                    help="leave PostToolUse hooks whose command contains TEXT unwrapped")
     args = ap.parse_args(argv)
     cfgdir = os.path.expanduser(args.config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
     path = os.path.join(cfgdir, "settings.json")
@@ -170,7 +177,7 @@ def main(argv, run_tests=True):
             if r.returncode != 0:
                 print(f"{script} --test failed; nothing changed.\n{r.stdout[-2000:]}")
                 return 1
-    changes = install(new)
+    changes = install(new, args.no_wrap)
     if not changes:
         print(f"already installed in {path}")
         return 0
@@ -301,6 +308,19 @@ def test():
             os.chdir(here)
         with open(os.path.join(repo, ".gitignore")) as f:
             check("gitignore gains the report once", f.read() == "node_modules/\n" + REPORT + "\n")
+
+        status = {"hooks": {"PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "status-hook --pid"}]}]}}
+        nw = os.path.join(tmp, "nowrap")
+        os.makedirs(nw)
+        with open(os.path.join(nw, "settings.json"), "w") as f:
+            json.dump(status, f)
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["--config-dir", nw, "--no-wrap", "status-hook"], run_tests=False)
+        with open(os.path.join(nw, "settings.json")) as f:
+            post = json.load(f)["hooks"]["PostToolUse"]
+        check("no-wrap: hook left as is", post[0]["hooks"][0]["command"] == "status-hook --pid")
+        check("no-wrap: filter added on its own",
+              any(g.get("matcher") == "Bash|Read|Grep" and "filter.py" in g["hooks"][0]["command"] for g in post))
 
         with open(settings, "w") as f:
             f.write(raw)
