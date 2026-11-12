@@ -33,7 +33,8 @@ SAFE_DOTFILES = {
 HOME_FILE = re.compile(r"^(?:~|\$HOME|\$\{HOME\}|/root|/home/[^/]+|/Users/[^/]+)/(\.[^/]+)(/.*)?$")
 SECRET_SUBPATH = re.compile(
     r"(?:^|/)(?:\.aws/credentials|\.kube/config|\.docker/config\.json|\.config/gh/hosts\.yml"
-    r"|\.config/rclone/rclone\.conf|\.cloudflared/[^/]+|\.gnupg/.+)$"
+    r"|\.config/rclone/rclone\.conf|\.cloudflared/[^/]+|\.gnupg/.+"
+    r"|\.cache/no-leaky/vault\.json|\.config/no-leaky/data\.key)$"
     r"|(?:^|/)\.ssh/(?!.*\.pub$)(?!config$|known_hosts|authorized_keys)[^/]+$"
 )
 SECRET_DIR = re.compile(r"^/etc/wireguard/|^/etc/shadow$|^/proc/[^/]+/environ$")
@@ -69,7 +70,8 @@ SINKS = {
     "cmp", "curl", "docker", "gh", "kubectl", "md5", "md5sum", "scp", "security", "sha1sum",
     "sha256sum", "shasum", "ssh", "wc", "wrangler", "kamal", "npx",
 }
-WRAPPERS = {"bash", "doas", "eval", "kamal", "kubectl", "sh", "ssh", "sudo", "timeout", "watch", "zsh", "docker", "X"}
+WRAPPERS = {"bash", "doas", "eval", "kamal", "kubectl", "nl-run", "sh", "ssh", "sudo", "timeout", "watch", "zsh",
+            "docker", "X"}
 ADVICE = (
     "Do not retry with another filter, and do not redact it yourself: that is how it leaked "
     "often. Use it without printing: `. file`, `\"$(cat file)\"`, `jq --rawfile`, a pipe "
@@ -348,6 +350,9 @@ def test():
         "git add ~/.ssh/id_ed25519",
         "infisical run -- env",
         "doppler run -- printenv",
+        "nl-run -- sh -c 'cat .env'",
+        "cat ~/.cache/no-leaky/vault.json",
+        "cat ~/.config/no-leaky/data.key",
     ]
     allowed = [
         ". ~/.my-token",
@@ -389,6 +394,7 @@ def test():
         "git add src/app.py .gitignore",
         "git add -A",
         "git commit -m 'stop tracking .env'",
+        'nl-run -- psql "$DATABASE_URL" -c "select id from orders"',
     ]
     bad = [c for c in denied if not check_command(c, cfg)] + [c for c in allowed if check_command(c, cfg)]
     if "git history" not in deny_message(check_command("git add .env", cfg) or ""):
