@@ -14,6 +14,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import data  # noqa: E402
 import detect  # noqa: E402
 
 AGENTS = ("claude", "codex", "gemini")
@@ -28,6 +29,8 @@ FIX = {
     "stripe": "Roll it in the Stripe Dashboard under Developers > API keys, check request logs.",
     "private_key": "Replace the key pair, remove the old public key everywhere it is trusted.",
 }
+DATA_FIX = ("Personal data cannot be rotated. Remove the transcript copies you control, and check whether the "
+            "people it belongs to must be told.")
 GENERIC_FIX = "Rotate it where it was issued, then add its fingerprint to ignore with the date."
 PASTED = "you pasted it"
 BLOCKED = "you pasted it, blocked before sending (local copy only)"
@@ -153,7 +156,7 @@ POOL_MIN = 8
 
 def _scan_file(job):
     """One transcript file -> (distinct finding rows, bad line count). Runs in a worker process."""
-    is_claude, path, since, names, lengths = job
+    is_claude, path, since, names, lengths, dcfg, key = job
     known = detect.Known(names)
     known.lengths = lengths
     stats = {"bad_lines": 0}
@@ -165,9 +168,23 @@ def _scan_file(job):
                 continue
             for f in detect.find(text, known):
                 rows.add((f.fp, f.kind, f.tier, f.name, sid, date, route))
+            for f in data.find_data(text, dcfg, key):
+                rows.add((f.token[-9:-1], f.kind, "data", "", sid, date, route))
     except OSError:
         stats["bad_lines"] += 1
     return rows, stats["bad_lines"]
+
+
+def _workers():
+    """Half the cores: a scan runs while the user keeps working."""
+    return max(1, (os.cpu_count() or 2) // 2)
+
+
+def _polite():
+    try:
+        os.nice(10)
+    except (OSError, AttributeError):
+        pass
 
 
 def _map(fn, jobs):
@@ -176,7 +193,7 @@ def _map(fn, jobs):
         return map(fn, jobs)
     try:
         import multiprocessing
-        pool = multiprocessing.get_context("spawn").Pool(max(1, (os.cpu_count() or 2) - 1))
+        pool = multiprocessing.get_context("spawn").Pool(_workers(), initializer=_polite)
     except (OSError, ImportError, ValueError):
         return map(fn, jobs)
     with pool:
@@ -190,7 +207,7 @@ def _size(path):
         return 0
 
 
-def run_scan(agent, since, session, cfg, home, config_dir):
+def run_scan(agent, since, session, cfg, home, config_dir, key=None):
     known_src = known_with_sources(cfg, home)
     known = detect.Known({h: v[0] for h, v in known_src.items()})
     known.lengths = {v[2] for v in known_src.values()}
@@ -206,7 +223,9 @@ def run_scan(agent, since, session, cfg, home, config_dir):
             coverage[a] = f"covered ({len(files)} files)" if files or exists else "not found"
             reader = claude_events if a == "claude" else generic_events
             sources += [(reader, p) for p in files]
-    jobs = [(reader is claude_events, path, since, dict(known), known.lengths) for reader, path in sources]
+    key = key or data.load_key()
+    dcfg = {k: cfg.get(k) or [] for k in ("internal_names", "data_allow")}
+    jobs = [(reader is claude_events, path, since, dict(known), known.lengths, dcfg, key) for reader, path in sources]
     leaks = {}
     for part, bad in _map(_scan_file, jobs):
         stats["bad_lines"] += bad
@@ -225,7 +244,7 @@ def run_scan(agent, since, session, cfg, home, config_dir):
     ignored = {(i.get("fp") if isinstance(i, dict) else i) for i in cfg.get("ignore", [])}
     for lk in leaks.values():
         lk["ignored"] = lk["fp"] in ignored
-        lk["fix"] = FIX.get(lk["kind"], GENERIC_FIX)
+        lk["fix"] = DATA_FIX if lk["tier"] == "data" else FIX.get(lk["kind"], GENERIC_FIX)
         lk["stopped_by"] = ("prompt guard" if lk["route"].startswith(PASTED)
                             else "command guard or output filter" if ":" in lk["route"] else "-")
     return {"leaks": leaks, "coverage": coverage, "bad_lines": stats["bad_lines"]}
@@ -246,6 +265,7 @@ def render(res):
     groups = [
         ("Certain, act on these", lambda lk: lk["tier"] == "certain" and not lk["ignored"]),
         ("Likely, check these", lambda lk: lk["tier"] == "likely" and not lk["ignored"]),
+        ("Personal and business data", lambda lk: lk["tier"] == "data" and not lk["ignored"]),
         ("Ignored", lambda lk: lk["ignored"]),
         ("Public by design, no action", lambda lk: lk["tier"] == "public" and not lk["ignored"]),
     ]
@@ -253,7 +273,7 @@ def render(res):
     out += [f"- {a}: {c}" for a, c in res["coverage"].items()]
     if res["bad_lines"]:
         out.append(f"- skipped {res['bad_lines']} unreadable lines (a session still being written, or damaged)")
-    out.append("- values are never shown; fp is the first 8 hex of SHA-256 of the value")
+    out.append("- values are never shown; fp is the first 8 hex of SHA-256 of the value, or of the keyed token for data")
     order = lambda lk: (lk["tier"] != "certain", -len(lk["sessions"]), lk["fp"])  # noqa: E731
     for title, keep in groups:
         rows = sorted((lk for lk in res["leaks"].values() if keep(lk)), key=order)
@@ -262,7 +282,7 @@ def render(res):
     return "\n".join(out) + "\n"
 
 
-def main(argv, cfg=None, home=None, config_dir=None):
+def main(argv, cfg=None, home=None, config_dir=None, key=None):
     import argparse
 
     ap = argparse.ArgumentParser(prog="scan.py")
@@ -284,7 +304,7 @@ def main(argv, cfg=None, home=None, config_dir=None):
     home = home or os.path.expanduser("~")
     if config_dir is None:
         config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
-    res = run_scan(args.agent, args.since, args.session, cfg, home, config_dir)
+    res = run_scan(args.agent, args.since, args.session, cfg, home, config_dir, key)
     text = render(res)
     sys.stdout.write(text)
     with open(args.report, "w") as f:
@@ -305,6 +325,9 @@ def test():
         if not cond:
             bad.append(label)
 
+    import data
+    dkey = os.urandom(32)
+    data.load_key = lambda *a, **k: dkey  # never create the real key from a self-check
     with tempfile.TemporaryDirectory() as tmp:
         home = os.path.join(tmp, "home")
         cfgdir = os.path.join(home, ".claude")
@@ -403,10 +426,30 @@ def test():
         finally:
             POOL_MIN = 8
         check("pool gives the same result", pooled == serial)
+        check("scan uses at most half the cores", _workers() == max(1, (os.cpu_count() or 2) // 2))
 
         one = os.path.join(cfgdir, "projects", "p-one", "s-1.jsonl")
         res = run_scan("all", None, one, cfg, home, cfgdir)
         check("session flag reads one file", res["coverage"] == {"session": "covered (1 files)"})
+        import data
+        nik, gh = data.fake_data("nik"), detect.fake("github")
+        sess = os.path.join(tmp, "s-data.jsonl")
+        with open(sess, "w") as f:
+            f.write(line(type="assistant", message={"role": "assistant", "content": [
+                {"type": "tool_use", "id": "d1", "name": "Bash", "input": {"command": "sqlite3 shop.db 'select *'"}}]}) + "\n")
+            f.write(line(type="user", message={"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "d1", "content": f"1|{nik}|{gh}\n"}]}) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = main(["--session", sess, "--report", report], cfg=cfg, home=home, config_dir=cfgdir, key=dkey)
+        rep = open(report).read()
+        tokhex = data.token("nik", nik, dkey)[-9:-1]
+        check("data section", "## Personal and business data (1)" in rep)
+        check("data row names kind, route and token", any(l.startswith("| nik |") and "Bash: sqlite3" in l and tokhex in l
+                                                          for l in rep.splitlines()))
+        check("data value never shown", nik not in rep and nik not in out.getvalue() and gh not in rep)
+        check("secret still listed", "## Certain, act on these (1)" in rep)
+        check("exit 1 with data", code == 1)
         shutil.rmtree(cfgdir)
 
     if bad:

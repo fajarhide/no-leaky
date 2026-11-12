@@ -27,15 +27,17 @@ EMAIL = re.compile(r"(?<![\w.%+-])([A-Za-z0-9._%+-]+)@([A-Za-z0-9-]+(?:\.[A-Za-z
 SKIP_TLD = {"local", "internal", "invalid", "test", "example", "localhost", "png", "jpg", "jpeg", "gif", "svg",
             "webp", "js", "ts", "css", "py", "md", "json"}
 SKIP_DOMAIN = {"example.com", "example.org", "example.net"}
-PHONE_INTL = re.compile(r"(?<![\w+])\+\d(?:[ -]?\d){6,14}(?!\d)")
-PHONE_ID = re.compile(r"(?<![\w+])08[1-9](?:[ -]?\d){7,10}(?!\d)")
-DIGITS16 = re.compile(r"(?<!\d)\d{16}(?!\d)")
+PHONE_INTL = re.compile(r"(?<![\w+-])\+\d(?:[ -]?\d){6,14}(?![\w-])")
+PHONE_ID = re.compile(r"(?<![\w+-])08[1-9](?:[ -]?\d){7,10}(?![\w-])")
+DIGITS16 = re.compile(r"(?<![\w-])\d{16}(?![\w-])")
 NPWP_FMT = re.compile(r"(?<!\d)\d{2}\.\d{3}\.\d{3}\.\d-\d{3}\.\d{3}(?!\d)")
-NPWP_BARE = re.compile(r"(?<!\d)\d{15,16}(?!\d)")
-CARD = re.compile(r"(?<![\d-])\d(?:[ -]?\d){12,18}(?!\d)")
+NPWP_BARE = re.compile(r"(?<![\w-])\d{15,16}(?![\w-])")
+CARD = re.compile(r"(?<![\w-])(?:\d{13,19}|\d{4}(?:[ -]\d{4}){2}[ -]\d{1,7}|\d{4}[ -]\d{6}[ -]\d{4,5})(?![\w-])")
 IP = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.]|\.\d)")
-ACCOUNT = re.compile(r"(?<!\d)\d{12}(?!\d)")
+ACCOUNT = re.compile(r"(?<![\w-])\d{12}(?![\w-])")
 ACCOUNT_NEAR = re.compile(r"(?i)arn:|account|owner")
+LONG_DIGITS = re.compile(r"\d{7}|\d{3,4}[ -]\d{3,4}[ -]\d{3,4}|\+\d|\d{4}[ -]\d{6}|\d{3}\.\d-\d{3}")
+DOTTED_DIGITS = re.compile(r"\d\.\d{1,3}\.\d")
 VERSION_NEAR = re.compile(r"version|==|>=|<=|~=", re.I)
 PROVINCES = {11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 31, 32, 33, 34, 35, 36, 51, 52, 53, 61, 62, 63, 64, 65,
              71, 72, 73, 74, 75, 76, 81, 82, 91, 92, 93, 94, 95, 96, 97}
@@ -108,6 +110,18 @@ def _in_path(text, s, e):
 
 
 def _candidates(text, cfg):
+    has_long = LONG_DIGITS.search(text) is not None
+    if "@" in text:
+        yield from _emails(text)
+    if has_long:
+        yield from _numbers(text)
+    if "." in text and DOTTED_DIGITS.search(text):
+        yield from _ips(text)
+    if cfg.get("internal_names"):
+        yield from _names(text, cfg)
+
+
+def _emails(text):
     for m in EMAIL.finditer(text):
         local, domain, tld = m.group(1), m.group(2).lower(), m.group(3).lower()
         if tld in SKIP_TLD or domain in SKIP_DOMAIN or local.lower().startswith(("noreply", "no-reply")):
@@ -115,22 +129,39 @@ def _candidates(text, cfg):
         if text[m.end():m.end() + 1] == ":":  # git@host:org/repo is a remote, not an address
             continue
         yield "email", m.start(), m.end()
-    for rx in (PHONE_INTL, PHONE_ID):
-        for m in rx.finditer(text):
-            yield "phone", m.start(), m.end()
-    for m in DIGITS16.finditer(text):
-        if _nik(m.group()):
-            yield "nik", m.start(), m.end()
-    for m in NPWP_FMT.finditer(text):
-        yield "npwp", m.start(), m.end()
-    if "npwp" in text.lower():
-        for m in NPWP_BARE.finditer(text):
-            if "npwp" in text[max(0, m.start() - 20):m.start()].lower():
-                yield "npwp", m.start(), m.end()
-    for m in CARD.finditer(text):
-        d = re.sub(r"\D", "", m.group())
-        if 13 <= len(d) <= 19 and CARD_PREFIX.match(d) and _luhn(d) and not _nik(d):
-            yield "card", m.start(), m.end()
+
+
+NUM_RUN = re.compile(r"\+?\d[\d .-]{5,}\d")
+
+
+def _numbers(text):
+    """Number kinds, searched only inside runs of digits and separators: one sweep over a large output
+    instead of seven."""
+    has_npwp = "npwp" in text.lower()
+    for w in NUM_RUN.finditer(text):
+        s, e = w.start(), min(len(text), w.end() + 1)  # one char past the run so lookaheads see it
+        for rx in (PHONE_INTL, PHONE_ID):
+            for m in rx.finditer(text, s, e):
+                yield "phone", m.start(), m.end()
+        for m in DIGITS16.finditer(text, s, e):
+            if _nik(m.group()):
+                yield "nik", m.start(), m.end()
+        for m in NPWP_FMT.finditer(text, s, e):
+            yield "npwp", m.start(), m.end()
+        if has_npwp:
+            for m in NPWP_BARE.finditer(text, s, e):
+                if "npwp" in text[max(0, m.start() - 20):m.start()].lower():
+                    yield "npwp", m.start(), m.end()
+        for m in CARD.finditer(text, s, e):
+            d = re.sub(r"\D", "", m.group())
+            if 13 <= len(d) <= 19 and CARD_PREFIX.match(d) and _luhn(d) and not _nik(d):
+                yield "card", m.start(), m.end()
+        for m in ACCOUNT.finditer(text, s, e):
+            if ACCOUNT_NEAR.search(text[max(0, m.start() - 40):m.start()]):
+                yield "account", m.start(), m.end()
+
+
+def _ips(text):
     for m in IP.finditer(text):
         parts = m.group().split(".")
         if any(int(p) > 255 for p in parts):
@@ -143,9 +174,9 @@ def _candidates(text, cfg):
             continue
         if not _in_path(text, m.start(), m.end()):
             yield "ip", m.start(), m.end()
-    for m in ACCOUNT.finditer(text):
-        if ACCOUNT_NEAR.search(text[max(0, m.start() - 40):m.start()]):
-            yield "account", m.start(), m.end()
+
+
+def _names(text, cfg):
     for name in cfg.get("internal_names") or []:
         if not name:
             continue
@@ -234,8 +265,15 @@ def test():
 
     for clean in ('user_email = row["email"]', "phone_number = models.CharField(max_length=20)",
                   "requests==2.31.0", "release v1.2.3.4", "order 4111111111111112", "ts 1731400000000",
-                  "icon x@2x.png", "alice@example.com", "203.0.113.10 and 127.0.0.1"):
+                  "icon x@2x.png", "alice@example.com", "203.0.113.10 and 127.0.0.1",
+                  '"sessionId":"3f2a8c41-4123-5678-9012-1234567890ab"', "trace 0812-3456-7890-abcd-ef",
+                  "id 9b1e-4532-0151-1283-0366-f00d", "uuid 00000000-4539-1488-0343-646700000000"):
         check(f"left alone: {clean}", find_data(clean, cfg, key) == [])
+
+    body = "41234567890123"
+    d15 = next(body + c for c in "0123456789" if _luhn(body + c))
+    uuid = f'"sessionId":"8c41e{d15[:3]}-{d15[3:7]}-{d15[7:11]}-{d15[11:]}abcdef12"'
+    check("Luhn-valid digits inside a UUID are not a card", find_data(uuid, cfg, key) == [])
 
     local, domain = v["email"].split("@")
     check("email case", token("email", v["email"], key) == token("email", local.upper() + "@" + domain.upper(), key))
@@ -250,6 +288,10 @@ def test():
     grouped = " ".join(c[i:i + 4] for i in range(0, 16, 4))
     fg = find_data(f"paid with {grouped} today", cfg, key)
     check("card spellings agree", fg and fg[0].token == token("card", c, key))
+
+    check("prefilter skips dates", not LONG_DIGITS.search("2026-11-12T10:00:00Z took 12ms"))
+    amex = "378282246310005"
+    check("amex grouped found", [f.kind for f in find_data(f"amex {amex[:4]} {amex[4:10]} {amex[10:]} ok", cfg, key)] == ["card"])
 
     owner = fake_data("email")
     allow_cfg = dict(cfg, data_allow=[owner.upper()])
