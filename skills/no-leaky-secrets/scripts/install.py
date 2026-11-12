@@ -14,8 +14,12 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = ("Bash", "Read", "Grep")
+FILTER_TOOLS = TOOLS + ("mcp__.*",)
+GUARD_TOOLS = TOOLS + ("Edit", "Write")  # Edit and Write: a data token must not be written into a real file  # MCP output is rewritable too (measured), so the filter covers it
 OURS = ("guard.py", "filter.py", "prompt_guard.py")
 REPORT = "no-leaky-report.md"
+BIN_DIR = os.path.expanduser("~/.local/bin")
+SHIM_MARK = "# no-leaky shim"
 
 
 def _cmd(script, *extra):
@@ -34,15 +38,15 @@ def _ours(command, script=None):
     return any(os.path.join(HERE, n) in _tokens(command) for n in names)
 
 
-def _overlaps(matcher):
+def _overlaps(matcher, tools=TOOLS):
     import re
     """The subset of TOOLS a hook matcher fires on."""
     if matcher in (None, "", "*"):
-        return set(TOOLS)
+        return set(tools)
     try:
-        return {t for t in TOOLS if re.fullmatch(matcher, t)}
+        return {t for t in tools if re.fullmatch(matcher, t)}
     except re.error:
-        return {t for t in TOOLS if t in matcher}
+        return {t for t in tools if t in matcher}
 
 
 def _commands(groups):
@@ -59,13 +63,20 @@ def install(s, no_wrap=()):
     hooks = s.setdefault("hooks", {})
     changes = []
     pre = hooks.setdefault("PreToolUse", [])
-    if not any(_ours(h["command"], "guard.py") for h in _commands(pre)):
-        pre.append({"matcher": "|".join(TOOLS), "hooks": [{"type": "command", "command": _cmd("guard.py")}]})
-        changes.append("PreToolUse: added guard.py on Bash|Read|Grep")
+    guard_matcher = "|".join(GUARD_TOOLS)
+    ours = [g for g in pre if any(h.get("type") == "command" and _ours(h.get("command", ""), "guard.py")
+                                  for h in g.get("hooks", []))]
+    if not ours:
+        pre.append({"matcher": guard_matcher, "hooks": [{"type": "command", "command": _cmd("guard.py")}]})
+        changes.append(f"PreToolUse: added guard.py on {guard_matcher}")
+    for g in ours:
+        if g.get("matcher") != guard_matcher:
+            g["matcher"] = guard_matcher
+            changes.append(f"PreToolUse: guard.py now also on Edit and Write")
     post = hooks.setdefault("PostToolUse", [])
     covered = set()
     for g in post:
-        tools = _overlaps(g.get("matcher"))
+        tools = _overlaps(g.get("matcher"), FILTER_TOOLS)
         if not tools:
             continue
         for h in g.get("hooks", []):
@@ -76,7 +87,7 @@ def install(s, no_wrap=()):
                 h["command"] = _cmd("filter.py", "--after", h["command"])
                 changes.append(f"PostToolUse: {g.get('matcher')!r} hook now runs through filter.py --after")
             covered |= tools
-    missing = [t for t in TOOLS if t not in covered]
+    missing = [t for t in FILTER_TOOLS if t not in covered]
     if missing:
         post.append({"matcher": "|".join(missing), "hooks": [{"type": "command", "command": _cmd("filter.py")}]})
         changes.append(f"PostToolUse: added filter.py on {'|'.join(missing)}")
@@ -121,6 +132,31 @@ def _write(path, text, mode_from=None):
     if os.path.exists(src):
         os.chmod(tmp, os.stat(src).st_mode & 0o777)
     os.replace(tmp, target)
+
+
+def _shim(dry=False, remove=False):
+    """Put nl-run on PATH as a tiny sh shim, or take ours away. Returns a line for the user, or None."""
+    path = os.path.join(BIN_DIR, "nl-run")
+    ours = os.path.exists(path) and SHIM_MARK in open(path, errors="replace").read()
+    if remove:
+        if ours and not dry:
+            os.remove(path)
+        return f"removed {path}" if ours else None
+    if os.path.exists(path) and not ours:
+        return f"{path} exists and is not ours; left alone. Call {os.path.join(HERE, 'nl_run.py')} directly."
+    text = f'#!/bin/sh\n{SHIM_MARK}\nexec {shlex.quote(sys.executable)} {shlex.quote(os.path.join(HERE, "nl_run.py"))} "$@"\n'
+    if ours and open(path).read() == text:
+        return None
+    if dry:
+        return f"would add the nl-run command at {path}"
+    os.makedirs(BIN_DIR, exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+    os.chmod(path, 0o755)
+    line = f"added the nl-run command at {path}"
+    if BIN_DIR not in os.environ.get("PATH", "").split(os.pathsep):
+        line += f"; {BIN_DIR} is not on PATH, add it so nl-run works"
+    return line
 
 
 def _gitignore():
@@ -169,6 +205,9 @@ def main(argv, run_tests=True):
             return 0
         _write(path, text)
         print(f"removed the no-leaky hooks from {path}")
+        shim = _shim(remove=True)
+        if shim:
+            print(shim)
         return 0
 
     if run_tests:
@@ -178,6 +217,9 @@ def main(argv, run_tests=True):
                 print(f"{script} --test failed; nothing changed.\n{r.stdout[-2000:]}")
                 return 1
     changes = install(new, args.no_wrap)
+    shim = _shim(dry=args.dry_run)
+    if shim:
+        print(shim)
     if not changes:
         print(f"already installed in {path}")
         return 0
@@ -206,6 +248,10 @@ def test():
         if not cond:
             bad.append(label)
 
+    global BIN_DIR
+    real_bin = BIN_DIR
+    tmp_bin = tempfile.mkdtemp()
+    BIN_DIR = os.path.join(tmp_bin, "bin")  # never touch the real ~/.local/bin from a self-check
     other_post = "other-rewriter --post-hook"
     original = {
         "env": {"SOME_FLAG": "1"},
@@ -232,7 +278,7 @@ def test():
         hooks = s["hooks"]
         pre = [h["command"] for g in hooks["PreToolUse"] for h in g["hooks"]]
         check("old pre hook kept", "python3 /x/other-guard.py" in pre)
-        check("guard added with matcher", any(g["matcher"] == "Bash|Read|Grep" and "guard.py" in g["hooks"][0]["command"]
+        check("guard added with matcher", any(g["matcher"] == "Bash|Read|Grep|Edit|Write" and "guard.py" in g["hooks"][0]["command"]
                                              for g in hooks["PreToolUse"]))
         check("guard path absolute", all(os.path.isabs(shlex.split(c)[1]) for c in pre if "guard.py" in c))
         post = hooks["PostToolUse"]
@@ -240,8 +286,9 @@ def test():
         check("other rewriter wrapped in place", post[0]["matcher"] == "Bash|Read|Grep|WebFetch"
               and "filter.py" in wrapped and shlex.split(wrapped)[-2:] == ["--after", other_post])
         check("unrelated post hook untouched", post[1]["hooks"][0]["command"] == "fmt-hook")
-        check("no separate filter entry when wrapped",
-              sum("filter.py" in h["command"] for g in post for h in g["hooks"]) == 1)
+        check("only MCP gets its own filter entry when the rest is wrapped",
+              [g["matcher"] for g in post if any("filter.py" in h["command"] and "--after" not in h["command"]
+                                                 for h in g["hooks"])] == ["mcp__.*"])
         check("prompt guard added", any("prompt_guard.py" in h["command"] for g in hooks["UserPromptSubmit"] for h in g["hooks"]))
         check("other keys kept", s["env"] == {"SOME_FLAG": "1"})
 
@@ -252,10 +299,28 @@ def test():
         with open(settings) as f:
             check("idempotent", f.read() == once)
 
+        shim_path = os.path.join(BIN_DIR, "nl-run")
+        shim_ok = os.path.exists(shim_path) and (os.stat(shim_path).st_mode & 0o777) == 0o755
+        check("nl-run shim created 0755 with the marker", shim_ok and SHIM_MARK in open(shim_path).read()
+              and "nl_run.py" in open(shim_path).read())
+
         with contextlib.redirect_stdout(io.StringIO()):
             main(["--config-dir", cfgdir, "--uninstall"], run_tests=False)
         with open(settings) as f:
             check("uninstall restores byte for byte", f.read() == raw)
+        check("uninstall removes our shim", not os.path.exists(shim_path))
+
+        with open(shim_path, "w") as f:
+            f.write("#!/bin/sh\necho someone else's tool\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["--config-dir", cfgdir], run_tests=False)
+        check("foreign nl-run left alone and reported", "someone else" in open(shim_path).read()
+              and "not ours" in out.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["--config-dir", cfgdir, "--uninstall"], run_tests=False)
+        check("uninstall keeps a foreign nl-run", os.path.exists(shim_path))
+        os.remove(shim_path)
 
         bare = os.path.join(tmp, "bare")
         os.makedirs(bare)
@@ -272,7 +337,7 @@ def test():
         with open(os.path.join(bare, "settings.json")) as f:
             s = json.load(f)
         check("env config dir used, filter added on its own",
-              any(g.get("matcher") == "Bash|Read|Grep" and "filter.py" in g["hooks"][0]["command"]
+              any(g.get("matcher") == "Bash|Read|Grep|mcp__.*" and "filter.py" in g["hooks"][0]["command"]
                   for g in s["hooks"]["PostToolUse"]))
 
         partial = os.path.join(tmp, "partial")
@@ -289,7 +354,7 @@ def test():
         post = s["hooks"]["PostToolUse"]
         check("partial overlap: Bash wrapped", "filter.py" in post[0]["hooks"][0]["command"])
         check("partial overlap: Read and Grep get their own filter",
-              any(g.get("matcher") == "Read|Grep" and "filter.py" in g["hooks"][0]["command"] for g in post))
+              any(g.get("matcher") == "Read|Grep|mcp__.*" and "filter.py" in g["hooks"][0]["command"] for g in post))
         check("symlink kept", os.path.islink(os.path.join(partial, "settings.json")))
         bk = [n for n in os.listdir(partial) if "no-leaky-backup" in n]
         check("backup keeps 0600", bk and (os.stat(os.path.join(partial, bk[0])).st_mode & 0o777) == 0o600)
@@ -320,14 +385,19 @@ def test():
             post = json.load(f)["hooks"]["PostToolUse"]
         check("no-wrap: hook left as is", post[0]["hooks"][0]["command"] == "status-hook --pid")
         check("no-wrap: filter added on its own",
-              any(g.get("matcher") == "Bash|Read|Grep" and "filter.py" in g["hooks"][0]["command"] for g in post))
+              any(g.get("matcher") == "Bash|Read|Grep|mcp__.*" and "filter.py" in g["hooks"][0]["command"] for g in post))
 
+        if os.path.exists(shim_path):
+            os.remove(shim_path)  # earlier installs in this check put it there
         with open(settings, "w") as f:
             f.write(raw)
         with contextlib.redirect_stdout(io.StringIO()):
             code = main(["--config-dir", cfgdir, "--dry-run"], run_tests=False)
         with open(settings) as f:
-            check("dry run writes nothing", f.read() == raw and code == 0)
+            check("dry run writes nothing", f.read() == raw and code == 0 and not os.path.exists(shim_path))
+
+    BIN_DIR = real_bin
+    __import__("shutil").rmtree(tmp_bin, ignore_errors=True)
 
     if bad:
         print("WRONG:", *bad, sep="\n  ")

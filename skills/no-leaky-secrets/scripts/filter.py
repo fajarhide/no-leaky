@@ -9,16 +9,22 @@ Self-check: python3 filter.py --test
 """
 
 import json
+import re
 import os
 import subprocess
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import data  # noqa: E402
 import detect  # noqa: E402
+import vault  # noqa: E402
 
 TOOLS = {"Bash", "Read", "Grep"}
 LOG = os.path.expanduser("~/.cache/no-leaky/filter.log")
+
+
+SECRET_MARK = re.compile(r"\[secret: [^\]\n]*\]")
 
 
 def _redact_tree(x, known, found):
@@ -33,15 +39,47 @@ def _redact_tree(x, known, found):
     return x
 
 
-def rewrite(payload, known):
-    """The hook output that replaces secrets in this tool response, or None when nothing changes."""
-    if payload.get("tool_name") not in TOOLS:
+def _tokenize_tree(x, cfg, key, found, pairs):
+    """Personal data as tokens, on output whose secrets are already redacted (their markers are skipped)."""
+    if isinstance(x, str):
+        skip = [m.span() for m in SECRET_MARK.finditer(x)]
+        new, dfound, p = data.tokenize(x, cfg, key, skip)
+        found.extend(dfound)
+        pairs.update(p)
+        return new
+    if isinstance(x, list):
+        return [_tokenize_tree(i, cfg, key, found, pairs) for i in x]
+    if isinstance(x, dict):
+        return {k: _tokenize_tree(v, cfg, key, found, pairs) for k, v in x.items()}
+    return x
+
+
+def rewrite(payload, known, cfg=None, key=None, vault_path=None, log=None):
+    """The hook output that replaces secrets (and, with cfg and key, personal data) in this tool response,
+    or None when nothing changes."""
+    name = payload.get("tool_name") or ""
+    if name not in TOOLS and not name.startswith("mcp__"):
         return None
     path = (payload.get("tool_input") or {}).get("file_path") or ""
     if path and detect.is_fixture_path(path):
         return None
     found = []
     resp = _redact_tree(payload.get("tool_response"), known, found)
+    if cfg is not None and key:
+        # The data step runs on the secret-redacted copy; if it fails, the secrets-only result still stands.
+        try:
+            dfound, pairs = [], {}
+            tokenized = _tokenize_tree(resp, cfg, key, dfound, pairs)
+            resp, found = tokenized, found + dfound
+            if pairs:
+                try:
+                    vault.remember(pairs, vault_path or vault.VAULT_PATH)
+                except Exception as e:  # tokens still hide the values; only nl-run loses them
+                    if log:
+                        _log(f"vault {type(e).__name__}", log)
+        except Exception as e:
+            if log:
+                _log(f"data {type(e).__name__}", log)
     if not found:
         return None
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": resp}}
@@ -77,7 +115,7 @@ def _their(raw, after, timeout, tool, log):
     return (parsed, proc.stdout) if isinstance(parsed, dict) else (None, "")
 
 
-def run(raw, known=None, log=LOG, after=None, timeout=50):
+def run(raw, known=None, log=LOG, after=None, timeout=50, cfg=None, key=None, vault_path=None):
     """Hook entry. Never blocks work: on any error it logs the error type and passes output through.
 
     timeout stays under Claude Code's default 60 s hook limit so this hook is not killed first.
@@ -93,9 +131,16 @@ def run(raw, known=None, log=LOG, after=None, timeout=50):
         base = payload.get("tool_response")
         if their is not None:
             base = (their.get("hookSpecificOutput") or {}).get("updatedToolOutput", base)
+        if cfg is None:
+            cfg = detect.load_config()
         if known is None:
-            known = detect.load_known(detect.load_config(), max_age=600)
-        ours = rewrite(dict(payload, tool_response=base), known)
+            known = detect.load_known(cfg, max_age=600)
+        if key is None:
+            try:
+                key = data.load_key()
+            except Exception as e:  # no key: secrets are still redacted, data is not
+                _log(f"{tool} key {type(e).__name__}", log)
+        ours = rewrite(dict(payload, tool_response=base), known, cfg, key, vault_path, log)
         if ours and their is not None:
             their.setdefault("hookSpecificOutput", {}).update(ours["hookSpecificOutput"])
             json.dump(their, sys.stdout)
@@ -120,6 +165,8 @@ def test():
         if not cond:
             bad.append(label)
 
+    test_key = os.urandom(32)
+    data.load_key = lambda *a, **k: test_key  # never create the real key from a self-check
     key = detect.fake("github")
     bash = {"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "cat config"},
             "tool_response": {"stdout": f"a=1\nTOKEN={key}\nb=2\n", "stderr": "", "interrupted": False,
@@ -213,6 +260,60 @@ def test():
         with contextlib.redirect_stdout(stdout):
             run(json.dumps(clean), known={}, log=log, after=f"{sys.executable} {silent}")
         check("after: nothing to do prints nothing", stdout.getvalue() == "")
+
+        # Personal data becomes tokens after secrets, and the vault can map them back.
+        dkey = os.urandom(32)
+        dcfg = dict(detect.DEFAULT_CONFIG)
+        vpath = os.path.join(tmp, "vault.json")
+        email, phone = data.fake_data("email"), data.fake_data("phone")
+        mixed = dict(bash, tool_response=dict(bash["tool_response"],
+                                              stdout=f"a=1\nTOKEN={key}\nuser {email} phone {phone}\nb=2\n"))
+        out = rewrite(mixed, {}, dcfg, dkey, vpath)
+        so = out and out["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
+        check("data: secret and data both replaced", so and "[secret: github" in so and "[email: k" in so
+              and "[phone: k" in so and not any(x in so for x in (key, email, phone)))
+        check("data: rest kept", so and so.startswith("a=1\nTOKEN=") and so.endswith("\nb=2\n"))
+        back, missing = vault.resolve(so or "", vpath)
+        check("data: vault maps tokens back", email in back and phone in back and missing == [])
+        fx = dict(read, tool_input={"file_path": "/app/tests/fixtures/users.yml"},
+                  tool_response=dict(read["tool_response"], file=dict(read["tool_response"]["file"], content=email)))
+        check("data: fixture left alone", rewrite(fx, {}, dcfg, dkey, vpath) is None)
+        check("data: secret only unchanged", rewrite(bash, {}, dcfg, dkey, vpath) == rewrite(bash, {}))
+
+        # review 1: a broken data path must not switch secret redaction off
+        real_remember, real_tokenize, real_load = vault.remember, data.tokenize, data.load_key
+
+        def broken(*a, **k):
+            raise OSError("disk full")
+        for label, patch in (("vault fails", ("remember",)), ("tokenize fails", ("tokenize",)), ("key fails", ("load_key",))):
+            vault.remember = broken if "remember" in patch else real_remember
+            data.tokenize = broken if "tokenize" in patch else real_tokenize
+            data.load_key = broken if "load_key" in patch else real_load
+            stdout = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(stdout):
+                    run(json.dumps(mixed), known={}, log=log, cfg=dcfg, key=None if "load_key" in patch else dkey,
+                        vault_path=vpath)
+            finally:
+                vault.remember, data.tokenize, data.load_key = real_remember, real_tokenize, real_load
+            got = stdout.getvalue()
+            check(f"{label}: secret still redacted", "[secret: github" in got and key not in got)
+            if label == "vault fails":
+                check(f"{label}: data still tokenized", "[email: k" in got and email not in got)
+
+        mcp = {"hook_event_name": "PostToolUse", "tool_name": "mcp__db__query", "tool_input": {"sql": "select 1"},
+               "tool_response": [{"type": "text", "text": f"customer {email} plan gold"}]}
+        out = rewrite(mcp, {}, dcfg, dkey, vpath)
+        check("data: MCP output tokenized", out and email not in json.dumps(out)
+              and "[email: k" in out["hookSpecificOutput"]["updatedToolOutput"][0]["text"])
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            run(json.dumps(mixed), known={}, log=log, after=f"{sys.executable} {other_hook}",
+                cfg=dcfg, key=dkey, vault_path=vpath)
+        so = json.loads(stdout.getvalue())["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
+        check("data: after chain keeps theirs and adds tokens", so.startswith("A=ONE") and "[email: k" in so
+              and email not in so)
 
     if bad:
         print("WRONG:", *bad, sep="\n  ")

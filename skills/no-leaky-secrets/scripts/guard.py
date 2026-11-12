@@ -18,6 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import detect  # noqa: E402
+import vault  # noqa: E402
 
 
 # Top-level dotfiles under a home directory are secret unless listed here. A new token
@@ -33,7 +34,8 @@ SAFE_DOTFILES = {
 HOME_FILE = re.compile(r"^(?:~|\$HOME|\$\{HOME\}|/root|/home/[^/]+|/Users/[^/]+)/(\.[^/]+)(/.*)?$")
 SECRET_SUBPATH = re.compile(
     r"(?:^|/)(?:\.aws/credentials|\.kube/config|\.docker/config\.json|\.config/gh/hosts\.yml"
-    r"|\.config/rclone/rclone\.conf|\.cloudflared/[^/]+|\.gnupg/.+)$"
+    r"|\.config/rclone/rclone\.conf|\.cloudflared/[^/]+|\.gnupg/.+"
+    r"|\.cache/no-leaky/vault\.json|\.config/no-leaky/data\.key)$"
     r"|(?:^|/)\.ssh/(?!.*\.pub$)(?!config$|known_hosts|authorized_keys)[^/]+$"
 )
 SECRET_DIR = re.compile(r"^/etc/wireguard/|^/etc/shadow$|^/proc/[^/]+/environ$")
@@ -69,7 +71,8 @@ SINKS = {
     "cmp", "curl", "docker", "gh", "kubectl", "md5", "md5sum", "scp", "security", "sha1sum",
     "sha256sum", "shasum", "ssh", "wc", "wrangler", "kamal", "npx",
 }
-WRAPPERS = {"bash", "doas", "eval", "kamal", "kubectl", "sh", "ssh", "sudo", "timeout", "watch", "zsh", "docker", "X"}
+WRAPPERS = {"bash", "doas", "eval", "kamal", "kubectl", "nl-run", "sh", "ssh", "sudo", "timeout", "watch", "zsh",
+            "docker", "X"}
 ADVICE = (
     "Do not retry with another filter, and do not redact it yourself: that is how it leaked "
     "often. Use it without printing: `. file`, `\"$(cat file)\"`, `jq --rawfile`, a pipe "
@@ -79,7 +82,27 @@ ADVICE = (
 )
 
 
+# Commands that search or query by a value: given a token they match its text and quietly return nothing.
+LOOKUPS = {"grep", "egrep", "fgrep", "rg", "ag", "ack", "awk", "sed", "jq", "yq", "find", "psql", "mysql", "sqlite3",
+           "mongosh", "mongo", "redis-cli", "duckdb", "clickhouse-client"}
+DATA_TOKEN_ADVICE = (
+    "Blocked: this {what} holds a data token like [email: k3f9a01c27b4], which only nl-run can resolve. Run as written it "
+    "matches the token's text, not the value, and the answer would be wrong. Run the same command through nl-run "
+    "(for example nl-run -- grep -n '[email: k3f9a01c27b4]' users.csv); matching lines come back as tokens.")
+
+
+DATA_WRITE_ADVICE = (
+    "Blocked: this writes a data token like [email: k3f9a01c27b4] into {path}, which would put the token's text in "
+    "the file instead of the value and break it. Write the change with a script fed to nl-run on stdin, which resolves "
+    "tokens: nl-run -- python3 - < fix.py. A token in a Markdown or text note is fine.")
+NOTE_EXT = (".md", ".markdown", ".txt", ".rst")
+
+
 def deny_message(hit):
+    if hit.startswith("data-write:"):
+        return DATA_WRITE_ADVICE.format(path=hit.split(":", 1)[1] or "a file")
+    if hit.startswith("data-token:"):
+        return DATA_TOKEN_ADVICE.format(what="search" if hit.endswith("Grep") else "command")
     if hit.startswith("git add "):
         return (f"Blocked: `{hit}` would put a credential source into git history, which keeps it "
                 "after the file is deleted and travels with every clone and push. Add it to .gitignore "
@@ -281,7 +304,20 @@ def check(payload, cfg=None):
     tool = payload.get("tool_name")
     args = payload.get("tool_input", {})
     if tool == "Bash":
-        return check_command(args.get("command", ""))
+        command = args.get("command", "")
+        if vault.TOKEN_RE.search(command):
+            for stages in statements(strip_heredocs(command)):
+                for stage in stages:
+                    if stage and stage[0] in LOOKUPS and vault.TOKEN_RE.search(" ".join(stage)):
+                        return "data-token:Bash"
+        return check_command(command)
+    if tool == "Grep" and vault.TOKEN_RE.search(args.get("pattern") or ""):
+        return "data-token:Grep"
+    if tool in ("Write", "Edit"):
+        path = args.get("file_path") or ""
+        text = args.get("content") if tool == "Write" else args.get("new_string")
+        if vault.TOKEN_RE.search(text or "") and not path.lower().endswith(NOTE_EXT):
+            return "data-write:" + path
     if tool == "Read" and is_source(args.get("file_path", "")):
         return args["file_path"]
     if tool == "Grep" and args.get("output_mode") == "content":
@@ -348,6 +384,9 @@ def test():
         "git add ~/.ssh/id_ed25519",
         "infisical run -- env",
         "doppler run -- printenv",
+        "nl-run -- sh -c 'cat .env'",
+        "cat ~/.cache/no-leaky/vault.json",
+        "cat ~/.config/no-leaky/data.key",
     ]
     allowed = [
         ". ~/.my-token",
@@ -389,8 +428,28 @@ def test():
         "git add src/app.py .gitignore",
         "git add -A",
         "git commit -m 'stop tracking .env'",
+        'nl-run -- psql "$DATABASE_URL" -c "select id from orders"',
     ]
     bad = [c for c in denied if not check_command(c, cfg)] + [c for c in allowed if check_command(c, cfg)]
+    tok = "[email: k1234abcd5678]"
+    hit = check({"tool_name": "Grep", "tool_input": {"pattern": tok, "path": "users.csv"}}, cfg)
+    if not hit or "nl-run" not in deny_message(hit):
+        bad.append("Grep with a data token denied with an nl-run hint")
+    hit = check({"tool_name": "Bash", "tool_input": {"command": f"grep -n '{tok}' users.csv"}}, cfg)
+    if not hit or "nl-run" not in deny_message(hit):
+        bad.append("Bash with a data token outside nl-run denied with an nl-run hint")
+    if check({"tool_name": "Bash", "tool_input": {"command": f"nl-run -- grep -n '{tok}' users.csv"}}, cfg):
+        bad.append("nl-run with a data token allowed")
+    if check({"tool_name": "Grep", "tool_input": {"pattern": "user_email", "path": "app.py"}}, cfg):
+        bad.append("Grep without a token allowed")
+    # review 3: a token written into a real file corrupts it
+    for payload in ({"tool_name": "Write", "tool_input": {"file_path": "/srv/nginx.conf", "content": f"server {tok}:8080;"}},
+                    {"tool_name": "Edit", "tool_input": {"file_path": "app.yml", "old_string": "a", "new_string": f"host: {tok}"}}):
+        hit = check(payload, cfg)
+        if not hit or "nl-run" not in deny_message(hit):
+            bad.append(f"{payload['tool_name']} of a token into a config file denied")
+    if check({"tool_name": "Write", "tool_input": {"file_path": "notes/report.md", "content": f"customer {tok} fails"}}, cfg):
+        bad.append("token in a markdown report allowed")
     if "git history" not in deny_message(check_command("git add .env", cfg) or ""):
         bad.append("git add denial names git history")
 

@@ -8,12 +8,13 @@ Everything your coding agent sees is sent to its provider: every command's outpu
 
 We gave an agent ten everyday dev tasks, three times each, in a project seeded with fake keys. Without no-leaky, 18 of 30 sessions sent at least one key to the provider. With it, 0 of 30, and 28 of 30 still got the right answer.
 
-These two skills stop the next leak and find the ones already there. Values are never printed, not in a denial, a report or a log: every finding is a kind and a fingerprint, the first 8 hex of the value's SHA-256. You keep working the way you do now. They are for Claude Code, and the scan also reads Codex transcripts.
+These skills stop the next leak and find the ones already there, for secrets and for your customers' personal data. Values are never printed, not in a denial, a report or a log: every finding is a kind and a fingerprint, the first 8 hex of the value's SHA-256. You keep working the way you do now. They are for Claude Code, and the scan also reads Codex transcripts.
 
 | Skill | Use it when | You get back | skills.sh |
 | --- | --- | --- | --- |
 | `no-leaky-secrets` | Your agent works anywhere near `.env`, config, keys, containers or processes | A command that would print a secret is denied with the safe way to do the same thing, a secret that still reaches output is redacted, and a secret you paste is held back | [![no-leaky-secrets installs on skills.sh](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fwww.skills.sh%2Ffajarhide%2Fno-leaky%2Fno-leaky-secrets&search=Installs%3C%5C%2F%5Ba-z%5D%2B%3E%5Cs%2A%28%3F%3A%3C%5B%5E%3E%5D%2B%3E%5Cs%2A%29%2A%28%5B0-9.%2CKM%E2%80%93-%5D%2B%29&replace=%241&label=installs)](https://www.skills.sh/fajarhide/no-leaky/no-leaky-secrets) |
 | `no-leaky-scan` | You want to know what already leaked | Every secret in your past transcripts, where it came from, how many sessions, and how to rotate it | [![no-leaky-scan installs on skills.sh](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fwww.skills.sh%2Ffajarhide%2Fno-leaky%2Fno-leaky-scan&search=Installs%3C%5C%2F%5Ba-z%5D%2B%3E%5Cs%2A%28%3F%3A%3C%5B%5E%3E%5D%2B%3E%5Cs%2A%29%2A%28%5B0-9.%2CKM%E2%80%93-%5D%2B%29&replace=%241&label=installs)](https://www.skills.sh/fajarhide/no-leaky/no-leaky-scan) |
+| `no-leaky-data` | Your agent works on customer or user data: database rows, logs, CSV imports, tickets | Emails, phone numbers, national IDs, card numbers, internal IPs and client names arrive as tokens the agent can still use through `nl-run`, never as values | [![no-leaky-data installs on skills.sh](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fwww.skills.sh%2Ffajarhide%2Fno-leaky%2Fno-leaky-data&search=Installs%3C%5C%2F%5Ba-z%5D%2B%3E%5Cs%2A%28%3F%3A%3C%5B%5E%3E%5D%2B%3E%5Cs%2A%29%2A%28%5B0-9.%2CKM%E2%80%93-%5D%2B%29&replace=%241&label=installs)](https://www.skills.sh/fajarhide/no-leaky/no-leaky-data) |
 
 ## Measured
 
@@ -34,6 +35,27 @@ Claude Code 2.1.316 run headless, its default model, ten tasks, three runs each,
 | **Sessions that leaked** | **18 of 30** (33 values) | **0 of 30** |
 
 The guard denied 58 commands across the 30 sessions with hooks. 28 of 30 still answered correctly. The worker task failed 3 of 3: `ps` with arguments is denied, the agent searched by process name, the name was `python3`, and two runs said no worker was running when one was. In the container task one run used `podman inspect`, which the guard does not know yet; the filter redacted the env values, so nothing leaked. The bench cost $9.69.
+
+### Customer data
+
+A second bench gave the agent five tasks on a shop with 50 fake customers (email, phone, NIK) in SQLite, two
+support tickets, a failing CSV import and an app log, three runs each. "With no-leaky" means the hooks plus the
+skills installed, as `npx skills add` leaves them. A session counts as a leak when any of the 150 seeded values
+appears raw in its transcript; an answer counts when it matches the seeded data.
+
+| Task | Without no-leaky | With no-leaky |
+| --- | --- | --- |
+| List the orders of the customer in a ticket | 3 of 3 leaked | 0 of 3 |
+| Find which import row fails and why | 0 of 3 | 0 of 3 |
+| Find from the log whose checkout fails and why | 3 of 3 | 0 of 3 |
+| Count signups per day | 0 of 3 | 0 of 3 |
+| Export one customer's data for a deletion request | 3 of 3 | 0 of 3 |
+| **Sessions that leaked** | **9 of 15** (120 values) | **0 of 15** |
+| **Answered right** | 15 of 15 | **15 of 15** |
+
+With no-leaky the agents used `nl-run` 86 times and wrote a correct `export.json` holding the real values, without
+ever seeing them. One export run hit the bench's 10 minute limit after its file was already right. The bench cost
+$4.60.
 
 ## From "may my agent read .env?" to proof
 
@@ -98,6 +120,7 @@ Set up the no-leaky hooks
 | --- | --- |
 | "start the app with .env", "check this token works", "debug this container", "why was cat .env blocked" | `no-leaky-secrets` |
 | `/no-leaky-scan`, "did my agent leak anything" | `no-leaky-scan` |
+| "find this customer's orders", "why does this user's checkout fail", output holding `[email: k…]` | `no-leaky-data` |
 
 The hooks do not depend on the model choosing a skill. Once installed, they run on every Bash, Read and Grep call and on every prompt you send.
 
@@ -137,16 +160,42 @@ Exit code 1 means a real finding that is not ignored, so the scan can gate a bac
 
 Options: `--agent claude|codex|gemini`, `--since YYYY-MM-DD`, `--session FILE`, `--report PATH`, `--source-dir DIR`.
 
+## Personal data
+
+Secrets are not the only thing an agent sends to its provider. A query, a log line or a CSV import carries your customers' emails and phone numbers too. The same filter turns them into tokens before the model sees them:
+
+```
+$ sqlite3 shop.db "select id, email, phone, nik from users where id = 4411"
+4411|[email: k3f9a01c27b4]|[phone: k0c5d9a2e3f8]|[nik: k5e21b7f04a6]
+```
+
+The token is an HMAC of the value under a key that never leaves your machine, so the same customer gets the same token everywhere and nobody holding the token can work back to the value. The agent still acts on it through `nl-run`, which swaps the value in inside its own process:
+
+```sh
+nl-run -- sqlite3 shop.db "select id, status from orders where email = '[email: k3f9a01c27b4]'"
+```
+
+Detected: emails, phone numbers (`+` international and Indonesian `08`), NIK, NPWP, card numbers (Luhn), IPv4 addresses, AWS account IDs, and the names you list. A pasted prompt holding them is held back like a secret, and the scan reports them in their own section.
+
+`~/.config/no-leaky/config.json` takes `data_allow` (your own email and name, kept readable), `internal_names` (client or employer names to turn into tokens) and `data_hosts` (hosts `nl-run` may send resolved values to; network tools to any other host are refused).
+
 ## Limits
 
 Measured on Claude Code 2.1.322:
 
-- The output filter covers Bash, Read and Grep. WebFetch and MCP tools are not filtered yet.
+- The output filter covers Bash, Read, Grep and MCP tools. WebFetch is not filtered yet.
 - A blocked prompt never reaches the model, but Claude Code still writes one copy into the local transcript.
 - A running session does not pick up new hooks. They take effect in the next one.
 - Asking how a process was started fails: `ps` with arguments is denied, and the agent may then wrongly report the process is not running. 3 of 3 in the bench.
 - The guard knows `docker inspect` but not `podman inspect`. The filter is the only net there.
-- Personal and customer data (emails, phone numbers, national IDs) is not covered yet. A `no-leaky-data` skill that hands the agent fingerprints it can use without seeing the values is being designed.
+- Personal data detection covers structured values only. Names of people, street addresses and free text such as medical notes are not detected.
+- Landline numbers written without `+` are not detected.
+- A client name inside a path, URL or git remote stays readable, so `cd` and `git` keep working. It still reaches the provider.
+- Edit cannot use a token: Claude Code compares an Edit against the file before any hook runs. The agent edits such a line with `nl-run` and a script.
+- `nl-run` refusing network tools is a speed bump against a prompt-injected agent, not a sandbox. It sees through `env`, `timeout`, `sudo`, `xargs`, `bash -lc`, `/dev/tcp` and DNS lookups, but a script file that opens a connection itself, or a database client pointed at a remote host, still sends resolved values.
+- What `nl-run` prints comes back with the values it resolved turned into tokens. A value the command transforms first (base64, upper case, split up) is not recognized.
+- The vault in `~/.cache/no-leaky/vault.json` holds the values behind tokens in plain text, mode 0600, for 7 days after they were last seen. Keep it out of backups you share.
+- Data detection makes a full scan about 40% slower. The scan uses half the cores at low priority so the machine stays usable.
 - The likely tier is noisy: 153 rows on the author's machine, each to be checked by hand before you rotate anything. An entropy cutoff was measured and separated real keys from code no better.
 - A first scan of about 4 GB of transcripts takes about two minutes. The goal was one.
 - The scan reads Claude Code and Codex. Gemini CLI is read as plain text. Cursor is not read.
