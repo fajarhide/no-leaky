@@ -1,10 +1,10 @@
 # no-leaky
 
-<p align="center"><img src="assets/poster.png" width="840" alt="An agent session transcript stamped CAUGHT over a struck-out KEY LEAKED. cat .env, printenv and git add .env are denied, a key in a stack trace is redacted and a token pasted in chat is held. Beside it the line Stop your AI agent leaking your secrets, You told it not to read .env, the transcript says it did, and the command npx skills add fajarhide/no-leaky -g"></p>
+<p align="center"><img src="assets/poster.png" width="840" alt="A .env file whose values are blacked out, dripping amber onto caution tape that reads CAUGHT BY NO-LEAKY. Beside it: I scanned my AI agent's chat logs. 34 secrets were in there. It read .env anyway. no-leaky stops the next leak and finds the ones already there. npx skills add fajarhide/no-leaky -g"></p>
 
 Stop your AI agent leaking your secrets.
 
-You told it not to read `.env`. Then it ran `cat .env` to check one setting, `docker inspect` on a broken container, `ps aux` to find a process, or read a diff that held a key somebody committed. The value went into the transcript, and from there into backups, shared sessions and the provider's logs. Nothing broke, so nobody noticed. On one developer's machine, 362 Claude Code transcripts from six weeks held 35 distinct secrets across 28 projects.
+You told it not to read `.env`. Then it ran `cat .env` to check one setting, `docker inspect` on a broken container, `ps aux` to find a process, or read a diff that held a key somebody committed. The value went into the transcript, and from there into backups, shared sessions and the provider's logs. Nothing broke, so nobody noticed. When I scanned my own agent's chat logs, 34 secrets were in there.
 
 These two skills stop the next leak and find the ones already there. Values are never printed, not in a denial, a report or a log: every finding is a kind and a fingerprint, the first 8 hex of the value's SHA-256. You keep working the way you do now. They are for Claude Code, and the scan also reads Codex transcripts.
 
