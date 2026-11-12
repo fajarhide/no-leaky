@@ -399,6 +399,15 @@ def test():
     BIN_DIR = real_bin
     __import__("shutil").rmtree(tmp_bin, ignore_errors=True)
 
+    # Every SKILL.md must parse as YAML front matter, or skill installers skip it without a word.
+    import glob
+    for f in glob.glob(os.path.join(HERE, "..", "..", "*", "SKILL.md")):
+        head = open(f).read().split("---")[1]
+        for line in head.strip().splitlines():
+            key, _, val = line.partition(": ")
+            if val and not val.startswith(('"', "'")) and (": " in val or " #" in val):
+                bad.append(f"{os.path.basename(os.path.dirname(f))} SKILL.md {key} needs quotes")
+
     if bad:
         print("WRONG:", *bad, sep="\n  ")
         sys.exit(1)
