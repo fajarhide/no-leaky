@@ -6,7 +6,7 @@ Stop your AI agent leaking your secrets.
 
 Everything your coding agent sees is sent to its provider: every command's output, every file it reads, every grep result. You told it not to read `.env`. Then it ran `cat .env` to check one setting, `docker inspect` on a broken container, `ps aux` to find a process, or reviewed a commit that held a key. Nothing broke, so nobody noticed.
 
-We gave an agent ten everyday dev tasks, three times each, in a project seeded with fake keys. Without no-leaky, 18 of 30 sessions sent at least one key to the provider. With it, 0 of 30, and 28 of 30 still got the right answer.
+We gave an agent ten everyday dev tasks, three times each, in a project seeded with fake keys. Without no-leaky, 18 of 30 sessions sent at least one key to the provider. With it, 0 of 30, and 27 of 30 still got the right answer.
 
 These skills stop the next leak and find the ones already there, for secrets and for your customers' personal data. Values are never printed, not in a denial, a report or a log: every finding is a kind and a fingerprint, the first 8 hex of the value's SHA-256. You keep working the way you do now. They are for Claude Code, and the scan also reads Codex transcripts.
 
@@ -34,7 +34,7 @@ Claude Code 2.1.316 run headless, its default model, ten tasks, three runs each,
 | Find the worker process and how it started | 3 of 3 | 0 of 3 |
 | **Sessions that leaked** | **18 of 30** (33 values) | **0 of 30** |
 
-The guard denied 58 commands across the 30 sessions with hooks. 28 of 30 still answered correctly. The worker task failed 3 of 3: `ps` with arguments is denied, the agent searched by process name, the name was `python3`, and two runs said no worker was running when one was. In the container task one run used `podman inspect`, which the guard does not know yet; the filter redacted the env values, so nothing leaked. The bench cost $9.69.
+The guard denied 58 commands across the 30 sessions with hooks. 27 of 30 still answered correctly. The three misses were all the worker task: `ps` with arguments is denied, the agent searched by process name, the name was `python3`, two runs said no worker was running when one was, and the third said the hook blocked it. In the container task one run used `podman inspect`, which the guard does not know yet; the filter redacted the env values, so nothing leaked. The bench cost $9.69.
 
 ### Customer data
 
