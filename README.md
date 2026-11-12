@@ -1,6 +1,6 @@
 # no-leaky
 
-<p align="center"><img src="assets/poster.png" width="840" alt="A .env file whose values are blacked out, dripping amber onto caution tape that reads CAUGHT BY NO-LEAKY. Beside it: 30 AI agent sessions on everyday dev tasks. 18 of 30 leaked a secret to the AI provider. With no-leaky: 0 of 30. Same tasks, same agent, 28 of 30 still got the right answer. npx skills add fajarhide/no-leaky -g"></p>
+<p align="center"><img src="assets/poster.png" width="840" alt="A .env file whose values are blacked out, dripping amber onto caution tape that reads CAUGHT BY NO-LEAKY. Beside it: What your agent sees, its provider gets. Your agent just sent your .env to the AI provider. no-leaky stops it before it leaves your machine: blocks the read that would print it, redacts any key that still shows up, finds what already leaked. npx skills add fajarhide/no-leaky -g"></p>
 
 Stop your AI agent leaking your secrets.
 
