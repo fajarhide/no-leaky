@@ -1,6 +1,6 @@
 ---
 name: no-leaky-secrets
-description: Use before reading a config, .env, credentials file, token file, private key, container or process state (docker inspect, ps, printenv, crontab, systemctl), or before sharing a session, so a secret is used without being printed into the transcript. Also use when a command was blocked as a credential source, or when a secret already appeared in output.
+description: Use before reading a config, .env, credentials file, token file, private key, container or process state (docker inspect, ps, printenv, crontab, systemctl), before staging files with git add, or before sharing a session, so a secret is used without being printed into the transcript. Also use when a command was blocked as a credential source, when a secret already appeared in output, or when asked to set up the no-leaky hooks.
 ---
 
 # no-leaky-secrets
@@ -21,6 +21,7 @@ Anything a command prints lands in the transcript, and from there in backups, sh
 | Read a cron job | `crontab -l` | `crontab -l \| grep -c job-name`, or ask the user to look |
 | Pass a file to a remote host | `cat key`, then paste | `cat key \| ssh host 'cat > /path'`, `scp` |
 | Put a secret in a JSON body | inline it | `jq -n --rawfile k ~/.token '{key:$k}' \| curl -d @- ...` |
+| Share config with the team | `git add .env` | add `.env` to `.gitignore`, commit a `.env.example` with dummy values |
 
 Rules behind the table:
 
@@ -28,6 +29,16 @@ Rules behind the table:
 - To inspect, count and hash: `wc -l`, `stat`, `shasum`, `cmp`, `grep -c`. Prove it works by its effect.
 - Never write your own filter. `sed 's/=.*/=***/'`, `cut -c1-10`, `head`, `grep -v` on a credential source still print it, they only change the shape.
 - A "masked" copy, a prefix or a suffix is still a leak. Do not print one.
+
+## Setting up the hooks
+
+`npx skills add` copies this folder but cannot edit Claude Code settings, so the hooks are one step the user approves. When the user asks to set up no-leaky, or a credential read was not blocked and they want it to be:
+
+1. Run `python3 <this skill's folder>/scripts/install.py --dry-run` and show the user every line it would change.
+2. If a listed PostToolUse hook only reports status and never rewrites output (an app's own status or notification hook), add `--no-wrap '<part of its command>'`.
+3. On a yes, run it again without `--dry-run`. It backs up `settings.json` first. The hooks take effect in the next session.
+
+`install.py --uninstall` takes them out again.
 
 ## When the guard blocks a command
 
