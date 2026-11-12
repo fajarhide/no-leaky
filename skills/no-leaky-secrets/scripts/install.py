@@ -17,6 +17,8 @@ TOOLS = ("Bash", "Read", "Grep")
 FILTER_TOOLS = TOOLS + ("mcp__.*",)  # MCP output is rewritable too (measured), so the filter covers it
 OURS = ("guard.py", "filter.py", "prompt_guard.py")
 REPORT = "no-leaky-report.md"
+BIN_DIR = os.path.expanduser("~/.local/bin")
+SHIM_MARK = "# no-leaky shim"
 
 
 def _cmd(script, *extra):
@@ -124,6 +126,31 @@ def _write(path, text, mode_from=None):
     os.replace(tmp, target)
 
 
+def _shim(dry=False, remove=False):
+    """Put nl-run on PATH as a tiny sh shim, or take ours away. Returns a line for the user, or None."""
+    path = os.path.join(BIN_DIR, "nl-run")
+    ours = os.path.exists(path) and SHIM_MARK in open(path, errors="replace").read()
+    if remove:
+        if ours and not dry:
+            os.remove(path)
+        return f"removed {path}" if ours else None
+    if os.path.exists(path) and not ours:
+        return f"{path} exists and is not ours; left alone. Call {os.path.join(HERE, 'nl_run.py')} directly."
+    text = f'#!/bin/sh\n{SHIM_MARK}\nexec {shlex.quote(sys.executable)} {shlex.quote(os.path.join(HERE, "nl_run.py"))} "$@"\n'
+    if ours and open(path).read() == text:
+        return None
+    if dry:
+        return f"would add the nl-run command at {path}"
+    os.makedirs(BIN_DIR, exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+    os.chmod(path, 0o755)
+    line = f"added the nl-run command at {path}"
+    if BIN_DIR not in os.environ.get("PATH", "").split(os.pathsep):
+        line += f"; {BIN_DIR} is not on PATH, add it so nl-run works"
+    return line
+
+
 def _gitignore():
     if not os.path.isdir(".git"):
         return
@@ -170,6 +197,9 @@ def main(argv, run_tests=True):
             return 0
         _write(path, text)
         print(f"removed the no-leaky hooks from {path}")
+        shim = _shim(remove=True)
+        if shim:
+            print(shim)
         return 0
 
     if run_tests:
@@ -179,6 +209,9 @@ def main(argv, run_tests=True):
                 print(f"{script} --test failed; nothing changed.\n{r.stdout[-2000:]}")
                 return 1
     changes = install(new, args.no_wrap)
+    shim = _shim(dry=args.dry_run)
+    if shim:
+        print(shim)
     if not changes:
         print(f"already installed in {path}")
         return 0
@@ -207,6 +240,10 @@ def test():
         if not cond:
             bad.append(label)
 
+    global BIN_DIR
+    real_bin = BIN_DIR
+    tmp_bin = tempfile.mkdtemp()
+    BIN_DIR = os.path.join(tmp_bin, "bin")  # never touch the real ~/.local/bin from a self-check
     other_post = "other-rewriter --post-hook"
     original = {
         "env": {"SOME_FLAG": "1"},
@@ -254,10 +291,28 @@ def test():
         with open(settings) as f:
             check("idempotent", f.read() == once)
 
+        shim_path = os.path.join(BIN_DIR, "nl-run")
+        shim_ok = os.path.exists(shim_path) and (os.stat(shim_path).st_mode & 0o777) == 0o755
+        check("nl-run shim created 0755 with the marker", shim_ok and SHIM_MARK in open(shim_path).read()
+              and "nl_run.py" in open(shim_path).read())
+
         with contextlib.redirect_stdout(io.StringIO()):
             main(["--config-dir", cfgdir, "--uninstall"], run_tests=False)
         with open(settings) as f:
             check("uninstall restores byte for byte", f.read() == raw)
+        check("uninstall removes our shim", not os.path.exists(shim_path))
+
+        with open(shim_path, "w") as f:
+            f.write("#!/bin/sh\necho someone else's tool\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["--config-dir", cfgdir], run_tests=False)
+        check("foreign nl-run left alone and reported", "someone else" in open(shim_path).read()
+              and "not ours" in out.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["--config-dir", cfgdir, "--uninstall"], run_tests=False)
+        check("uninstall keeps a foreign nl-run", os.path.exists(shim_path))
+        os.remove(shim_path)
 
         bare = os.path.join(tmp, "bare")
         os.makedirs(bare)
@@ -324,12 +379,17 @@ def test():
         check("no-wrap: filter added on its own",
               any(g.get("matcher") == "Bash|Read|Grep|mcp__.*" and "filter.py" in g["hooks"][0]["command"] for g in post))
 
+        if os.path.exists(shim_path):
+            os.remove(shim_path)  # earlier installs in this check put it there
         with open(settings, "w") as f:
             f.write(raw)
         with contextlib.redirect_stdout(io.StringIO()):
             code = main(["--config-dir", cfgdir, "--dry-run"], run_tests=False)
         with open(settings) as f:
-            check("dry run writes nothing", f.read() == raw and code == 0)
+            check("dry run writes nothing", f.read() == raw and code == 0 and not os.path.exists(shim_path))
+
+    BIN_DIR = real_bin
+    __import__("shutil").rmtree(tmp_bin, ignore_errors=True)
 
     if bad:
         print("WRONG:", *bad, sep="\n  ")
