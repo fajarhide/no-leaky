@@ -6,11 +6,22 @@
 
 Stop your AI agent leaking your secrets.
 
-Everything your coding agent sees is sent to its provider: every command's output, every file it reads, every grep result. You told it not to read `.env`. Then it ran `cat .env` to check one setting, `docker inspect` on a broken container, `ps aux` to find a process, or reviewed a commit that held a key. Nothing broke, so nobody noticed.
+Everything your coding agent sees goes to its provider: every command's output, every file it reads, every grep result. Telling it not to read `.env` does not stop it. Agents still run `cat .env` to check one setting, `docker inspect` on a broken container, or `ps aux` to find a process.
+
+no-leaky stops the next leak and finds the ones already there, for secrets and for your customers' personal data. You keep working the way you do now. It runs on Claude Code, and the scan also reads Codex transcripts.
 
 We gave an agent ten everyday dev tasks, three times each, in a project seeded with fake keys. Without no-leaky, 18 of 30 sessions sent at least one key to the provider. With it, 0 of 30, and 27 of 30 still got the right answer.
 
-These skills stop the next leak and find the ones already there, for secrets and for your customers' personal data. Values are never printed, not in a denial, a report or a log: every finding is a kind and a fingerprint, the first 8 hex of the value's SHA-256. You keep working the way you do now. They are for Claude Code, and the scan also reads Codex transcripts.
+## How it works
+
+<p align="center"><img src="assets/how-it-works.svg" width="900" alt="How no-leaky works. The agent wants to run cat .env. Step 1, the guard, runs before the tool: cat .env is denied with the safe way, and set -a; . ./.env; set +a is allowed. The tool runs. Step 2, the filter, runs after the tool: a key left in the output becomes [secret: stripe, fp 4f0c2a91], a customer's email becomes [email: k3f9a01c27b4]. The provider sees fingerprints and tokens. Step 3, the prompt guard, holds back a secret you paste. Step 4, the scan, lists every key that already went through. nl-run swaps a token back to the real value on your machine."></p>
+
+1. **Guard**, before a tool runs. A command that would print a secret is denied, and the denial gives the safe way to do the same thing.
+2. **Filter**, after a tool runs. A secret that still shows up in the output becomes `[secret: <kind>, fp <8 hex>]`. A customer's email or phone number becomes a token the agent can still use through `nl-run`.
+3. **Prompt guard**. A secret you paste into the chat is held back.
+4. **Scan**. Lists every secret your past sessions already sent, and how to rotate it.
+
+No value is ever printed, in a denial, a report or a log. A finding is a kind and a fingerprint, the first 8 hex of the value's SHA-256.
 
 | Skill | Use it when | You get back | skills.sh |
 | --- | --- | --- | --- |
@@ -18,7 +29,70 @@ These skills stop the next leak and find the ones already there, for secrets and
 | `no-leaky-scan` | You want to know what already leaked | Every secret in your past transcripts, where it came from, how many sessions, and how to rotate it | [![no-leaky-scan installs on skills.sh](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fwww.skills.sh%2Ffajarhide%2Fno-leaky%2Fno-leaky-scan&search=Installs%3C%5C%2F%5Ba-z%5D%2B%3E%5Cs%2A%28%3F%3A%3C%5B%5E%3E%5D%2B%3E%5Cs%2A%29%2A%28%5B0-9.%2CKM%E2%80%93-%5D%2B%29&replace=%241&label=installs)](https://www.skills.sh/fajarhide/no-leaky/no-leaky-scan) |
 | `no-leaky-data` | Your agent works on customer or user data: database rows, logs, CSV imports, tickets | Emails, phone numbers, national IDs, card numbers, internal IPs and client names arrive as tokens the agent can still use through `nl-run`, never as values | [![no-leaky-data installs on skills.sh](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fwww.skills.sh%2Ffajarhide%2Fno-leaky%2Fno-leaky-data&search=Installs%3C%5C%2F%5Ba-z%5D%2B%3E%5Cs%2A%28%3F%3A%3C%5B%5E%3E%5D%2B%3E%5Cs%2A%29%2A%28%5B0-9.%2CKM%E2%80%93-%5D%2B%29&replace=%241&label=installs)](https://www.skills.sh/fajarhide/no-leaky/no-leaky-data) |
 
+## Install
+
+```sh
+npx skills add fajarhide/no-leaky -g
+```
+
+The skills work right away, and `/no-leaky-scan` runs from then on. The hooks need one more step, because a skill installer never edits Claude Code settings. Ask your agent:
+
+```
+Set up the no-leaky hooks
+```
+
+It shows what `install.py --dry-run` would change and installs after you say yes.
+
+Requirements: Python 3.9 or later, standard library only (macOS has it with the Xcode Command Line Tools or Homebrew; most Linux distributions ship it), and Node.js 22.20 or later for `npx skills add`. macOS and Linux; Windows is not supported yet. The hooks run `python3` from your PATH when it is a real install, so a Python upgrade does not break them; `--check` says so if it ever does.
+
+<details>
+<summary>Manual install, uninstall and what the installer changes</summary>
+
+Run it yourself:
+
+```sh
+python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py --dry-run
+python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py              # backs up settings.json first
+python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py --uninstall
+python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py --check       # are the hooks still there and runnable?
+```
+
+It honors `CLAUDE_CONFIG_DIR`. If another hook already rewrites tool output on the same tools, the installer runs it through the filter (`filter.py --after '<its command>'`), because Claude Code keeps only the rewrite that finishes last. A hook that never rewrites output does not need this, and wrapping one that reads its parent pid or is managed by another app breaks it. Leave those alone with `--no-wrap '<part of its command>'`.
+
+Without `-g`, the skills land inside whichever project you ran the command from.
+
+The installer also adds Claude Code's own `permissions.deny` rules for `.env`, `.env.local`, `.env.production` and the usual credential files (`~/.aws/credentials`, SSH private keys, `~/.npmrc`, `~/.kube/config` and a few more). They are a second layer: if a hook is ever missing, Claude Code itself refuses `Read .env` and `cat .env` (checked on a headless run with no hooks installed). Templates such as `.env.example` stay readable. Uninstall removes only the rules no-leaky added.
+
+If your Claude Code runs inside an app that keeps its own profile (Orca does), that app may re-copy `~/.claude/settings.json` over the profile's settings. The installer notices and puts the hooks in both places, so the next copy keeps them.
+
+</details>
+
+## Using them
+
+Ask your agent in plain words:
+
+```
+Did my agent leak any secrets?
+Start the app with the env from .env
+Check this API token still works
+Debug why the web container keeps restarting
+Set up the no-leaky hooks
+```
+
+| You say something like | It loads |
+| --- | --- |
+| "start the app with .env", "check this token works", "debug this container", "why was cat .env blocked" | `no-leaky-secrets` |
+| `/no-leaky-scan`, "did my agent leak anything" | `no-leaky-scan` |
+| "find this customer's orders", "why does this user's checkout fail", output holding `[email: k…]` | `no-leaky-data` |
+
+The hooks do not depend on the model choosing a skill. Once installed, they run on every Bash, Read and Grep call and on every prompt you send.
+
 ## Measured
+
+Secrets: 18 of 30 sessions leaked a key without no-leaky, 0 of 30 with it. Customer data: 9 of 15 leaked without it, 0 of 15 with it, and all 15 answers were still right.
+
+<details>
+<summary>Both benches, task by task</summary>
 
 Claude Code 2.1.316 run headless, its default model, ten tasks, three runs each, one fresh project per run. Each project held ten fake values: five in `.env`, an API token and a new Stripe key under `.secrets/`, a Google key in the last commit, an npm token in a cron file, and an Anthropic key in a running worker's arguments. A container failed with a Stripe key and a database password in its env. A session counts as a leak when any of those values appears raw in its transcript, which is what the provider receives.
 
@@ -59,6 +133,8 @@ With no-leaky the agents used `nl-run` 122 times and wrote a correct `export.jso
 ever seeing them. Measured on v0.2.3; the bench cost $4.91. An earlier run on v0.2.0 gave the same picture (9 of 15
 against 0 of 15, 15 of 15 right).
 
+</details>
+
 ## From "may my agent read .env?" to proof
 
 Asked whether their coding agent may read `.env`, about 60 developers in November 2026 split down the middle. Half said no. The other half said yes, as long as production values are different. Almost nobody named anything that makes either answer true.
@@ -82,58 +158,10 @@ Every part here follows the same four.
 3. **No masked copies.** A prefix, a suffix or `sk-***` is still a leak. Reports, denials and logs carry a kind and a fingerprint only.
 4. **Publish the losses.** What each part misses is listed under Limits, next to what it catches.
 
-## Install
+## Details
 
-```sh
-npx skills add fajarhide/no-leaky -g
-```
-
-The skills work right away, and `/no-leaky-scan` runs from then on. The hooks need one more step, because a skill installer never edits Claude Code settings. Ask your agent:
-
-```
-Set up the no-leaky hooks
-```
-
-It shows what `install.py --dry-run` would change and installs after you say yes. Or run it yourself:
-
-```sh
-python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py --dry-run
-python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py              # backs up settings.json first
-python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py --uninstall
-python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py --check       # are the hooks still there and runnable?
-```
-
-It honors `CLAUDE_CONFIG_DIR`. If another hook already rewrites tool output on the same tools, the installer runs it through the filter (`filter.py --after '<its command>'`), because Claude Code keeps only the rewrite that finishes last. A hook that never rewrites output does not need this, and wrapping one that reads its parent pid or is managed by another app breaks it. Leave those alone with `--no-wrap '<part of its command>'`.
-
-Without `-g`, the skills land inside whichever project you ran the command from.
-
-The installer also adds Claude Code's own `permissions.deny` rules for `.env`, `.env.local`, `.env.production` and the usual credential files (`~/.aws/credentials`, SSH private keys, `~/.npmrc`, `~/.kube/config` and a few more). They are a second layer: if a hook is ever missing, Claude Code itself refuses `Read .env` and `cat .env` (checked on a headless run with no hooks installed). Templates such as `.env.example` stay readable. Uninstall removes only the rules no-leaky added.
-
-If your Claude Code runs inside an app that keeps its own profile (Orca does), that app may re-copy `~/.claude/settings.json` over the profile's settings. The installer notices and puts the hooks in both places, so the next copy keeps them.
-
-Requirements: Python 3.9 or later, standard library only (macOS has it with the Xcode Command Line Tools or Homebrew; most Linux distributions ship it), and Node.js 22.20 or later for `npx skills add`. macOS and Linux; Windows is not supported yet. The hooks run `python3` from your PATH when it is a real install, so a Python upgrade does not break them; `--check` says so if it ever does.
-
-## Using them
-
-Ask your agent in plain words:
-
-```
-Did my agent leak any secrets?
-Start the app with the env from .env
-Check this API token still works
-Debug why the web container keeps restarting
-Set up the no-leaky hooks
-```
-
-| You say something like | It loads |
-| --- | --- |
-| "start the app with .env", "check this token works", "debug this container", "why was cat .env blocked" | `no-leaky-secrets` |
-| `/no-leaky-scan`, "did my agent leak anything" | `no-leaky-scan` |
-| "find this customer's orders", "why does this user's checkout fail", output holding `[email: k…]` | `no-leaky-data` |
-
-The hooks do not depend on the model choosing a skill. Once installed, they run on every Bash, Read and Grep call and on every prompt you send.
-
-## Guard
+<details>
+<summary>Guard: what each hook does and what it still allows</summary>
 
 | Hook | Event | What it does |
 | --- | --- | --- |
@@ -145,7 +173,10 @@ What the guard still allows: `set -a; . ./.env; set +a; npm start`, `curl -H "Au
 
 The filter caught keys the redaction layer in front of it missed. Seven fake vendor keys in one Bash output went through a token optimizer's post-hook first: it redacted 3 and passed 4 on raw. Chained behind it with `--after`, `filter.py` redacted the other 4, so 7 of 7 left as fingerprints. One run on one output, reported upstream.
 
-## Scan
+</details>
+
+<details>
+<summary>Scan: output, tiers and options</summary>
 
 ```sh
 python3 ~/.claude/skills/no-leaky-secrets/scripts/scan.py
@@ -169,7 +200,10 @@ Exit code 1 means a real finding that is not ignored, so the scan can gate a bac
 
 Options: `--agent claude|codex|gemini`, `--since YYYY-MM-DD`, `--session FILE`, `--report PATH`, `--source-dir DIR`.
 
-## Personal data
+</details>
+
+<details>
+<summary>Personal data: tokens and nl-run</summary>
 
 Secrets are not the only thing an agent sends to its provider. A query, a log line or a CSV import carries your customers' emails and phone numbers too. The same filter turns them into tokens before the model sees them:
 
@@ -187,6 +221,8 @@ nl-run -- sqlite3 shop.db "select id, status from orders where email = '[email: 
 Detected: emails, phone numbers (`+` international and Indonesian `08`), NIK, NPWP, card numbers (Luhn), IPv4 addresses, AWS account IDs, and the names you list. A pasted prompt holding them is held back like a secret, and the scan reports them in their own section.
 
 `~/.config/no-leaky/config.json` takes `data_allow` (your own email and name, kept readable), `internal_names` (client or employer names to turn into tokens) and `data_hosts` (hosts `nl-run` may send resolved values to; network tools to any other host are refused).
+
+</details>
 
 ## Limits
 

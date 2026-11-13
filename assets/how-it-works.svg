@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="t d">
+  <title id="t">How no-leaky works</title>
+  <desc id="d">Every tool call passes two checks. The guard denies a command that would print a secret before it runs. The filter replaces any secret left in the output with a fingerprint before the provider sees it. A pasted secret is held back, the scan finds what already leaked, and nl-run lets the agent use a customer's data through a token.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0L10 5L0 10z" fill="#8a8f98"/>
+    </marker>
+    <pattern id="tape" width="56" height="56" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="56" height="56" fill="#f5a623"/>
+      <rect width="28" height="56" fill="#141416"/>
+    </pattern>
+    <style>
+      .sans { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .label { font-size: 15px; letter-spacing: 4px; fill: #8a8f98; }
+      .h1 { font-size: 36px; font-weight: 700; fill: #f4f1ea; }
+      .box { fill: #17181b; stroke: #2c2e33; stroke-width: 2; }
+      .step { font-size: 14px; letter-spacing: 3px; font-weight: 700; }
+      .name { font-size: 26px; font-weight: 700; fill: #f4f1ea; }
+      .sub { font-size: 15px; fill: #8a8f98; }
+      .code { font-size: 15px; fill: #d9d6cf; }
+      .body { font-size: 16px; fill: #c9c6bf; }
+      .bad { fill: #ff6b5b; }
+      .ok { fill: #3ddc84; }
+      .amber { fill: #f5a623; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="760" fill="#0b0b0c"/>
+
+  <text x="60" y="70" class="sans label">HOW NO-LEAKY WORKS</text>
+  <text x="60" y="122" class="sans h1" font-size="36">Every tool call passes two checks before the provider sees it.</text>
+
+  <!-- main lane -->
+  <rect x="40" y="180" width="200" height="220" rx="14" class="box"/>
+  <text x="62" y="218" class="sans step" fill="#8a8f98">START</text>
+  <text x="62" y="254" class="sans name">Agent</text>
+  <text x="62" y="280" class="sans sub">wants to run a tool</text>
+  <rect x="62" y="306" width="156" height="34" rx="6" fill="#0b0b0c"/>
+  <text x="76" y="329" class="mono code">cat .env</text>
+
+  <line x1="244" y1="290" x2="286" y2="290" stroke="#8a8f98" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <rect x="290" y="160" width="270" height="260" rx="14" class="box" stroke="#f5a623"/>
+  <text x="312" y="198" class="sans step amber">1  GUARD</text>
+  <text x="312" y="232" class="sans name">Before it runs</text>
+  <text x="312" y="268" class="mono code">cat .env</text>
+  <text x="312" y="292" class="sans body bad">denied, with the safe way</text>
+  <text x="312" y="330" class="mono code">set -a; . ./.env; set +a</text>
+  <text x="312" y="354" class="sans body ok">allowed: uses it, never shows it</text>
+  <text x="312" y="396" class="sans sub">same for printenv and ps aux</text>
+
+  <line x1="564" y1="290" x2="606" y2="290" stroke="#8a8f98" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <rect x="610" y="200" width="150" height="180" rx="14" class="box"/>
+  <text x="632" y="238" class="sans step" fill="#8a8f98">RUN</text>
+  <text x="632" y="274" class="sans name">Tool</text>
+  <text x="632" y="306" class="sans sub">Bash, Read,</text>
+  <text x="632" y="328" class="sans sub">Grep, MCP</text>
+
+  <line x1="764" y1="290" x2="806" y2="290" stroke="#8a8f98" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <rect x="810" y="160" width="270" height="260" rx="14" class="box" stroke="#3ddc84"/>
+  <text x="832" y="198" class="sans step ok">2  FILTER</text>
+  <text x="832" y="232" class="sans name">After it runs</text>
+  <text x="832" y="268" class="sans body">a key left in the output</text>
+  <text x="832" y="294" class="mono code ok">[secret: stripe,</text>
+  <text x="832" y="316" class="mono code ok"> fp 4f0c2a91]</text>
+  <text x="832" y="352" class="sans body">a customer's email</text>
+  <text x="832" y="378" class="mono code ok">[email: k3f9a01c27b4]</text>
+
+  <line x1="1084" y1="290" x2="1106" y2="290" stroke="#8a8f98" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <rect x="1110" y="200" width="140" height="180" rx="14" class="box"/>
+  <text x="1130" y="238" class="sans step" fill="#8a8f98">SENT</text>
+  <text x="1130" y="274" class="sans name">Provider</text>
+  <text x="1130" y="306" class="sans sub">sees</text>
+  <text x="1130" y="328" class="sans sub">fingerprints</text>
+  <text x="1130" y="350" class="sans sub">and tokens</text>
+
+  <!-- bottom cards -->
+  <rect x="40" y="460" width="390" height="170" rx="14" class="box"/>
+  <text x="62" y="498" class="sans step amber">3  PROMPT GUARD</text>
+  <text x="62" y="534" class="sans body">A secret you paste into the chat</text>
+  <text x="62" y="560" class="sans body">is held back before it is sent.</text>
+  <text x="62" y="598" class="sans sub">Start the message with</text>
+  <text x="232" y="598" class="mono code">secret-ok:</text>
+  <text x="62" y="620" class="sans sub">to send it anyway.</text>
+
+  <rect x="450" y="460" width="390" height="170" rx="14" class="box"/>
+  <text x="472" y="498" class="sans step amber">4  SCAN</text>
+  <text x="472" y="534" class="sans body">Reads your past transcripts and</text>
+  <text x="472" y="560" class="sans body">lists every key that already went</text>
+  <text x="472" y="586" class="sans body">through, with how to rotate it.</text>
+  <text x="472" y="620" class="mono code">/no-leaky-scan</text>
+
+  <rect x="860" y="460" width="390" height="170" rx="14" class="box"/>
+  <text x="882" y="498" class="sans step ok">nl-run</text>
+  <text x="882" y="534" class="sans body">The agent works with the token.</text>
+  <text x="882" y="560" class="sans body">nl-run swaps the real value back in</text>
+  <text x="882" y="586" class="sans body">on your machine, out of the model's sight.</text>
+  <text x="882" y="620" class="mono code">nl-run -- sqlite3 shop.db ...</text>
+
+  <!-- tape -->
+  <rect x="0" y="672" width="1280" height="88" fill="url(#tape)"/>
+  <rect x="330" y="690" width="620" height="52" rx="8" fill="#141416"/>
+  <text x="640" y="724" text-anchor="middle" class="mono" font-size="20" font-weight="700" fill="#f5a623">npx skills add fajarhide/no-leaky -g</text>
+</svg>
