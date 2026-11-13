@@ -1,6 +1,8 @@
-<p align="center"><img src="assets/logo-wordmark.png" width="420" alt="no-leaky"></p>
-
 <p align="center">
+  <img src="./assets/logo-wordmark.png" alt="no-leaky" width="420" />
+</p>
+
+<div align="center">
 
 [![test](https://img.shields.io/github/actions/workflow/status/fajarhide/no-leaky/test.yml?branch=main&style=flat-square&label=test)](https://github.com/fajarhide/no-leaky/actions/workflows/test.yml)
 [![release](https://img.shields.io/github/v/release/fajarhide/no-leaky?style=flat-square&color=f5a623&label=release)](https://github.com/fajarhide/no-leaky/releases)
@@ -9,11 +11,11 @@
 [![skills.sh](https://www.skills.sh/b/fajarhide/no-leaky?style=flat-square)](https://www.skills.sh/fajarhide/no-leaky)
 [![MIT license](https://img.shields.io/badge/license-MIT-f4c430?style=flat-square)](LICENSE)
 
-</p>
+**Stop your AI agent leaking your secrets.**
+
+</div>
 
 <p align="center"><img src="assets/poster.png" width="840" alt="A .env file whose values are blacked out, dripping amber onto caution tape that reads CAUGHT BY NO-LEAKY. Beside it: What your agent sees, its provider gets. Your agent just sent your .env to the AI provider. no-leaky stops it before it leaves your machine: blocks the read that would print it, redacts any key that still shows up, finds what already leaked. npx skills add fajarhide/no-leaky -g"></p>
-
-Stop your AI agent leaking your secrets.
 
 Everything your coding agent sees goes to its provider: every command's output, every file it reads, every grep result. Telling it not to read `.env` does not stop it. Agents still run `cat .env` to check one setting, `docker inspect` on a broken container, or `ps aux` to find a process.
 
