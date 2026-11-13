@@ -3,6 +3,27 @@
 All notable changes to no-leaky. Versions follow [Semantic Versioning](https://semver.org/): before 1.0.0, a minor
 version adds features and may change hook behavior, a patch version only fixes.
 
+## [0.2.2] - unreleased
+
+### Fixed
+- A token-shaped string the vault never minted (a test fixture, a doc example) is no longer blocked in Write, Edit,
+  Grep or a lookup command: it stands for no data. Found while writing this release's own tests.
+- The guard no longer blocks a `grep`, `sed` or commit message that only mentions `docker inspect`; it denies the
+  command only when docker or podman actually runs.
+- `podman inspect` is guarded like `docker inspect`; `pgrep -a` (full command lines) is guarded like `ps aux`.
+- The `ps` denial points to `pgrep -f`, so the agent finds a process without seeing its arguments instead of
+  deciding it is not running.
+- Lookup commands holding a token are recognized behind a path or a wrapper (`/usr/bin/grep`, `sudo grep`,
+  `xargs grep`).
+- Not personal data any more: `+` and fewer than 10 digits (diff hunks, offsets), netmasks, GitHub noreply
+  addresses and subdomains of example.com, .org and .net.
+- `scan.py` exits 1 only for secrets. Data rows are still reported, but your own email in `git log` no longer fails
+  every run.
+- The filter self-check no longer reads the real `~/.config/no-leaky/config.json`.
+
+### Added
+- CI: every self-check runs on Ubuntu (Python 3.9 and 3.13) and macOS for each push and pull request.
+
 ## [0.2.1] - 2026-11-13
 
 ### Fixed
@@ -41,6 +62,7 @@ version adds features and may change hook behavior, a patch version only fixes.
 - The guard denies `git add` of a credential file.
 - `install.py --no-wrap` leaves a PostToolUse hook that never rewrites output unwrapped.
 
+[0.2.2]: https://github.com/fajarhide/no-leaky/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/fajarhide/no-leaky/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/fajarhide/no-leaky/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/fajarhide/no-leaky/releases/tag/v0.1.0

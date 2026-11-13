@@ -55,13 +55,14 @@ READERS = {
 SECRET_COMMANDS = [
     (re.compile(r"\bcrontab\s+-l\b"), "crontab -l"),
     (re.compile(r"\bsystemctl\s+(?:show|cat)\b"), "systemctl show or cat"),
-    (re.compile(r"\bdocker\s+inspect\b(?!.*(?:\.State|\.Image|\.RestartCount|\.NetworkSettings|\.Name|\.Mounts))"), "docker inspect"),
+    (re.compile(r"\b(?:docker|podman)\s+inspect\b(?!.*(?:\.State|\.Image|\.RestartCount|\.NetworkSettings|\.Name|\.Mounts))"), "docker inspect"),
     (re.compile(r"\bprintenv\b|(?:^|\s)env\s*$"), "printenv or env"),
     (re.compile(r"\bexport\s+-p\b|\bdeclare\s+-[a-zA-Z]*[xp]|(?:^|\s)(?:set|export|declare|typeset)\s*$"),
      "export -p, set or declare"),
     (re.compile(r"\bps\b[^|;&]*(?:\baux\b|-ef\b|-eo\s+\S*args|-o\s+\S*(?:args|command))"), "ps with arguments"),
     (re.compile(r"\bsecurity\s+find-[\w-]*password\b.*\s-w\b"), "security find-generic-password -w"),
     (re.compile(r"\bgh\s+auth\s+token\b"), "gh auth token"),
+    (re.compile(r"\bpgrep\b[^|;&]*(?:\s-[A-Za-z]*a[A-Za-z]*\b|--list-full)"), "pgrep with arguments"),
     (re.compile(r"\bkubectl\s+get\s+secrets?\b.*-o\b"), "kubectl get secret -o"),
     (re.compile(r"\bvault\s+(?:kv\s+)?(?:get|read)\b"), "vault read"),
     (re.compile(r"\bsecretsmanager\s+get-secret-value\b|\bkeyvault\s+secret\s+show\b"), "cloud secret read"),
@@ -83,6 +84,34 @@ ADVICE = (
 
 
 # Commands that search or query by a value: given a token they match its text and quietly return nothing.
+VAULT = vault.VAULT_PATH
+LOOKUP_WRAPPERS = {"sudo", "doas", "env", "command", "xargs", "timeout", "nice", "nohup", "time", "stdbuf"}
+PS_ADVICE = (
+    "Blocked: `ps` with arguments prints every process's command line, and those often carry tokens and passwords. "
+    "To find a process, run `pgrep -f <name or script>`: it prints only PIDs and matches the full command line, so it "
+    "finds `python3 worker.py` too. Then `ps -o pid,etime,comm -p <pid>` for its age. If you need the arguments it "
+    "was started with, ask the user to look.")
+
+
+def _known(text):
+    """True when the text holds a token minted on this machine. A token-shaped string the vault never saw (a test
+    fixture, a doc example) stands for no data, so writing or searching it harms nothing."""
+    toks = vault.TOKEN_RE.findall(text or "")
+    if not toks:
+        return False
+    _, missing = vault.resolve(" ".join(toks), VAULT)
+    return len(missing) < len(toks)
+
+
+def _lookup_tool(stage):
+    words = list(stage)
+    while words and os.path.basename(words[0]) in LOOKUP_WRAPPERS:
+        words = words[1:]
+        while words and (words[0].startswith("-") or "=" in words[0] or words[0].isdigit()):
+            words = words[1:]
+    return os.path.basename(words[0]) if words else ""
+
+
 LOOKUPS = {"grep", "egrep", "fgrep", "rg", "ag", "ack", "awk", "sed", "jq", "yq", "find", "psql", "mysql", "sqlite3",
            "mongosh", "mongo", "redis-cli", "duckdb", "clickhouse-client"}
 DATA_TOKEN_ADVICE = (
@@ -99,6 +128,8 @@ NOTE_EXT = (".md", ".markdown", ".txt", ".rst")
 
 
 def deny_message(hit):
+    if hit in ("ps with arguments", "pgrep with arguments"):
+        return PS_ADVICE
     if hit.startswith("data-write:"):
         return DATA_WRITE_ADVICE.format(path=hit.split(":", 1)[1] or "a file")
     if hit.startswith("data-token:"):
@@ -287,7 +318,14 @@ def check_command(command, cfg=None, depth=0):
             flat = " ".join(t for t in stage if " " not in t)
             full = " ".join(stage)  # a --format value with spaces names the safe fields
             for pattern, name in SECRET_COMMANDS:
-                if pattern.search(full if name == "docker inspect" else flat):
+                if name == "docker inspect":
+                    # Only when docker or podman runs here; a grep, sed or commit message naming it prints nothing.
+                    at = next((k for k, t in enumerate(stage[:-1])
+                               if os.path.basename(t) in ("docker", "podman") and stage[k + 1] == "inspect"), None)
+                    found = at is not None and pattern.search(" ".join(stage[at:]))
+                else:
+                    found = pattern.search(flat)
+                if found:
                     filtered = last and last[0] in ("grep", "egrep") and any(re.fullmatch(r"-\w*[coql]\w*E?", t) for t in last)
                     if not (ends_unseen(stages) or filtered):
                         return name
@@ -305,18 +343,18 @@ def check(payload, cfg=None):
     args = payload.get("tool_input", {})
     if tool == "Bash":
         command = args.get("command", "")
-        if vault.TOKEN_RE.search(command):
+        if vault.TOKEN_RE.search(command) and _known(command):
             for stages in statements(strip_heredocs(command)):
                 for stage in stages:
-                    if stage and stage[0] in LOOKUPS and vault.TOKEN_RE.search(" ".join(stage)):
+                    if stage and _lookup_tool(stage) in LOOKUPS and _known(" ".join(stage)):
                         return "data-token:Bash"
         return check_command(command)
-    if tool == "Grep" and vault.TOKEN_RE.search(args.get("pattern") or ""):
+    if tool == "Grep" and _known(args.get("pattern") or ""):
         return "data-token:Grep"
     if tool in ("Write", "Edit"):
         path = args.get("file_path") or ""
         text = args.get("content") if tool == "Write" else args.get("new_string")
-        if vault.TOKEN_RE.search(text or "") and not path.lower().endswith(NOTE_EXT):
+        if _known(text) and not path.lower().endswith(NOTE_EXT):
             return "data-write:" + path
     if tool == "Read" and is_source(args.get("file_path", "")):
         return args["file_path"]
@@ -431,13 +469,41 @@ def test():
         'nl-run -- psql "$DATABASE_URL" -c "select id from orders"',
     ]
     bad = [c for c in denied if not check_command(c, cfg)] + [c for c in allowed if check_command(c, cfg)]
+    if "pgrep -f" not in deny_message("ps with arguments"):
+        bad.append("ps denial points to pgrep -f")
+    for c in ("pgrep -af worker.py", "pgrep --list-full worker", "podman inspect web"):
+        if not check_command(c, cfg):
+            bad.append("denied: " + c)
+    for c in ('grep -n "docker inspect" README.md', "sed -n '/podman inspect/p' notes.md",
+              'git commit -m "guard docker inspect too"'):
+        if check_command(c, cfg):
+            bad.append("text that only mentions it allowed: " + c)
+    for c in ("sudo docker inspect web", "ssh host 'docker inspect web'"):
+        if not check_command(c, cfg):
+            bad.append("denied: " + c)
+    for c in ("pgrep -f worker.py", "pgrep -l worker", "podman inspect -f '{{.State.Status}}' web"):
+        if check_command(c, cfg):
+            bad.append("allowed: " + c)
+    global VAULT
+    real_vault = VAULT
+    vdir = tempfile.mkdtemp()
+    VAULT = os.path.join(vdir, "vault.json")
     tok = "[email: k1234abcd5678]"
+    vault.remember({tok: "someone@shop-a.co.id"}, VAULT)
+    stranger = "[email: k0000000000ff]"  # looks like a token, never minted here: a test fixture or a doc example
+    if check({"tool_name": "Write", "tool_input": {"file_path": "tests/test_tokens.py", "content": f"T = '{stranger}'"}}, cfg):
+        bad.append("a token the vault does not know may be written")
+    if check({"tool_name": "Bash", "tool_input": {"command": f"grep -n '{stranger}' tests/x.py"}}, cfg):
+        bad.append("a lookup for a token the vault does not know is allowed")
     hit = check({"tool_name": "Grep", "tool_input": {"pattern": tok, "path": "users.csv"}}, cfg)
     if not hit or "nl-run" not in deny_message(hit):
         bad.append("Grep with a data token denied with an nl-run hint")
     hit = check({"tool_name": "Bash", "tool_input": {"command": f"grep -n '{tok}' users.csv"}}, cfg)
     if not hit or "nl-run" not in deny_message(hit):
         bad.append("Bash with a data token outside nl-run denied with an nl-run hint")
+    for c in (f"/usr/bin/grep -n '{tok}' users.csv", f"sudo grep '{tok}' a.log", f"cat a.log | xargs grep '{tok}'"):
+        if not check({"tool_name": "Bash", "tool_input": {"command": c}}, cfg):
+            bad.append("token lookup behind a path or wrapper denied: " + c.split()[0])
     if check({"tool_name": "Bash", "tool_input": {"command": f"nl-run -- grep -n '{tok}' users.csv"}}, cfg):
         bad.append("nl-run with a data token allowed")
     if check({"tool_name": "Grep", "tool_input": {"pattern": "user_email", "path": "app.py"}}, cfg):
@@ -450,6 +516,7 @@ def test():
             bad.append(f"{payload['tool_name']} of a token into a config file denied")
     if check({"tool_name": "Write", "tool_input": {"file_path": "notes/report.md", "content": f"customer {tok} fails"}}, cfg):
         bad.append("token in a markdown report allowed")
+    VAULT = real_vault
     if "git history" not in deny_message(check_command("git add .env", cfg) or ""):
         bad.append("git add denial names git history")
 

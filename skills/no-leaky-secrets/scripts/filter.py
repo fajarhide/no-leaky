@@ -165,6 +165,9 @@ def test():
         if not cond:
             bad.append(label)
 
+    real_load_config = detect.load_config
+    config_reads = []
+    detect.load_config = lambda *a, **k: config_reads.append(1) or dict(detect.DEFAULT_CONFIG)
     test_key = os.urandom(32)
     data.load_key = lambda *a, **k: test_key  # never create the real key from a self-check
     key = detect.fake("github")
@@ -209,7 +212,7 @@ def test():
         stdout = io.StringIO()
         try:
             with contextlib.redirect_stdout(stdout):
-                code = run(json.dumps(bash), known={}, log=log)
+                code = run(json.dumps(bash), known={}, log=log, cfg=dict(detect.DEFAULT_CONFIG))
         finally:
             detect.redact = real
         check("crash exits 0", code == 0)
@@ -226,7 +229,7 @@ def test():
                     "'systemMessage':'other ran'},sys.stdout)\n")
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            run(json.dumps(bash), known={}, log=log, after=f"{sys.executable} {other_hook}")
+            run(json.dumps(bash), known={}, log=log, cfg=dict(detect.DEFAULT_CONFIG), after=f"{sys.executable} {other_hook}")
         chained = json.loads(stdout.getvalue())
         so = chained["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
         check("after: their rewrite kept", so.startswith("A=ONE"))
@@ -244,13 +247,13 @@ def test():
                 f.write(body)
             stdout, stderr = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                code = run(json.dumps(bash), known={}, log=log, after=f"{sys.executable} {hook}", timeout=1)
+                code = run(json.dumps(bash), known={}, log=log, cfg=dict(detect.DEFAULT_CONFIG), after=f"{sys.executable} {hook}", timeout=1)
             out = stdout.getvalue()
             check(f"{label}: exit 0", code == 0)
             check(f"{label}: still redacted", "[secret: github" in out and key not in out + stderr.getvalue())
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
-            code = run(json.dumps(bash), known={}, log=log, after=os.path.join(tmp, "missing-binary"))
+            code = run(json.dumps(bash), known={}, log=log, cfg=dict(detect.DEFAULT_CONFIG), after=os.path.join(tmp, "missing-binary"))
         check("missing binary: still redacted", code == 0 and "[secret: github" in stdout.getvalue())
 
         silent = os.path.join(tmp, "silent.py")
@@ -258,7 +261,7 @@ def test():
             f.write("import sys\nsys.stdin.read()\n")
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            run(json.dumps(clean), known={}, log=log, after=f"{sys.executable} {silent}")
+            run(json.dumps(clean), known={}, log=log, cfg=dict(detect.DEFAULT_CONFIG), after=f"{sys.executable} {silent}")
         check("after: nothing to do prints nothing", stdout.getvalue() == "")
 
         # Personal data becomes tokens after secrets, and the vault can map them back.
@@ -315,6 +318,8 @@ def test():
         check("data: after chain keeps theirs and adds tokens", so.startswith("A=ONE") and "[email: k" in so
               and email not in so)
 
+    detect.load_config = real_load_config
+    check("self-check never reads the real config", not config_reads)
     if bad:
         print("WRONG:", *bad, sep="\n  ")
         sys.exit(1)
