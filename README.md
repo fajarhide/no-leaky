@@ -1,5 +1,7 @@
 # no-leaky
 
+[![test](https://github.com/fajarhide/no-leaky/actions/workflows/test.yml/badge.svg)](https://github.com/fajarhide/no-leaky/actions/workflows/test.yml)
+
 <p align="center"><img src="assets/poster.png" width="840" alt="A .env file whose values are blacked out, dripping amber onto caution tape that reads CAUGHT BY NO-LEAKY. Beside it: What your agent sees, its provider gets. Your agent just sent your .env to the AI provider. no-leaky stops it before it leaves your machine: blocks the read that would print it, redacts any key that still shows up, finds what already leaked. npx skills add fajarhide/no-leaky -g"></p>
 
 Stop your AI agent leaking your secrets.
