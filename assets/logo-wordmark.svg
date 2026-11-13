@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="256" viewBox="0 0 980 256">
+  <title>no-leaky</title>
+  <g transform="translate(8 8) scale(0.94)">
+    <path d="M128 14 L226 50 V122 C226 184 186 226 128 244 C70 226 30 184 30 122 V50 Z" fill="#141416" stroke="#f5a623" stroke-width="12" stroke-linejoin="round"/>
+    <path d="M128 66 C128 66 80 122 80 156 A48 48 0 0 0 176 156 C176 122 128 66 128 66 Z" fill="#f5a623"/>
+    <circle cx="128" cy="150" r="13" fill="#141416"/>
+    <path d="M121 158 H135 L140 190 H116 Z" fill="#141416"/>
+  </g>
+  <text x="262" y="178" font-family="Avenir Next" font-weight="800" font-size="148" letter-spacing="-3"><tspan fill="#f5a623">no-</tspan><tspan fill="#141416">leaky</tspan></text>
+</svg>
