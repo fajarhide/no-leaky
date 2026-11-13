@@ -1,9 +1,4 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-wordmark-dark.png">
-    <img src="assets/logo-wordmark-light.png" width="420" alt="no-leaky">
-  </picture>
-</p>
+<p align="center"><img src="assets/logo-wordmark.png" width="420" alt="no-leaky"></p>
 
 <p align="center">
 

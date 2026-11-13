@@ -6,5 +6,5 @@
     <circle cx="128" cy="150" r="13" fill="#141416"/>
     <path d="M121 158 H135 L140 190 H116 Z" fill="#141416"/>
   </g>
-  <text x="262" y="178" font-family="Avenir Next" font-weight="800" font-size="148" letter-spacing="-3"><tspan fill="#f5a623">no-</tspan><tspan fill="#141416">leaky</tspan></text>
+  <text x="262" y="178" font-family="Avenir Next" font-weight="800" font-size="148" letter-spacing="-3"><tspan fill="#f5a623">no-</tspan><tspan fill="#7d8590">leaky</tspan></text>
 </svg>
