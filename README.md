@@ -107,6 +107,8 @@ It honors `CLAUDE_CONFIG_DIR`. If another hook already rewrites tool output on t
 
 Without `-g`, the skills land inside whichever project you ran the command from.
 
+The installer also adds Claude Code's own `permissions.deny` rules for `.env`, `.env.local`, `.env.production` and the usual credential files (`~/.aws/credentials`, SSH private keys, `~/.npmrc`, `~/.kube/config` and a few more). They are a second layer: if a hook is ever missing, Claude Code itself refuses `Read .env` and `cat .env` (checked on a headless run with no hooks installed). Templates such as `.env.example` stay readable. Uninstall removes only the rules no-leaky added.
+
 If your Claude Code runs inside an app that keeps its own profile (Orca does), that app may re-copy `~/.claude/settings.json` over the profile's settings. The installer notices and puts the hooks in both places, so the next copy keeps them.
 
 Requirements: Python 3.9 or later, standard library only (macOS has it with the Xcode Command Line Tools or Homebrew; most Linux distributions ship it), and Node.js 22.20 or later for `npx skills add`. macOS and Linux; Windows is not supported yet. The hooks run `python3` from your PATH when it is a real install, so a Python upgrade does not break them; `--check` says so if it ever does.

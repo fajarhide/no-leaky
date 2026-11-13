@@ -3,6 +3,15 @@
 All notable changes to no-leaky. Versions follow [Semantic Versioning](https://semver.org/): before 1.0.0, a minor
 version adds features and may change hook behavior, a patch version only fixes.
 
+## [0.2.4] - 2026-11-13
+
+### Added
+- The installer adds Claude Code's own `permissions.deny` rules for real env files (`.env`, `.env.local`,
+  `.env.production` and similar) and common credential files. They hold even if a hook is ever missing: on a run
+  with no hooks, Claude Code refused both `Read .env` and `cat .env` while `.env.example` stayed readable. The rules
+  added are recorded in `no-leaky-permissions.json`, so uninstall never removes rules the user wrote.
+- `install.py --check` reports missing deny rules.
+
 ## [0.2.3] - 2026-11-13
 
 ### Fixed
@@ -78,6 +87,7 @@ version adds features and may change hook behavior, a patch version only fixes.
 - The guard denies `git add` of a credential file.
 - `install.py --no-wrap` leaves a PostToolUse hook that never rewrites output unwrapped.
 
+[0.2.4]: https://github.com/fajarhide/no-leaky/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/fajarhide/no-leaky/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/fajarhide/no-leaky/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/fajarhide/no-leaky/compare/v0.2.0...v0.2.1
