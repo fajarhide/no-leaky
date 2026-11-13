@@ -41,6 +41,10 @@ Rules behind the table:
 
 `install.py --uninstall` takes them out again.
 
+## When Claude Code itself denies a read
+
+"File is in a directory that is denied by your permission settings" or "Permission to use Bash with command cat .env has been denied" comes from the `permissions.deny` rules no-leaky installs as a backup. Treat it like a guard denial: use the value without reading the file, never look for another way in.
+
 ## When the guard blocks a command
 
 The denial names the source and the safe way. Take the safe way. Do not retry with another filter or another reader. If you think it is a false alarm, say so in one line and ask the user to run the command themselves in Claude Code's shell mode (they type an exclamation mark, then the command).

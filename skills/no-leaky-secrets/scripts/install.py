@@ -22,6 +22,17 @@ OURS = ("guard.py", "filter.py", "prompt_guard.py")
 REPORT = "no-leaky-report.md"
 BIN_DIR = os.path.expanduser("~/.local/bin")
 CLAUDE_HOME = os.path.expanduser("~/.claude")
+# Claude Code's own deny rules, a backup layer that still holds if a hook is ever missing. A Read deny rule also
+# covers Grep, Glob, Edit, Write and Bash file commands such as cat. Deny rules take no exceptions, so templates
+# like .env.example are left out by naming each real env file instead of .env.*.
+DENY_RULES = [
+    "Read(**/.env)", "Read(**/.env.local)", "Read(**/.env.*.local)", "Read(**/.env.production)", "Read(**/.env.prod)",
+    "Read(**/.env.staging)", "Read(**/.env.development)", "Read(**/.env.dev)",
+    "Read(~/.aws/credentials)", "Read(~/.ssh/id_rsa)", "Read(~/.ssh/id_ed25519)", "Read(~/.ssh/id_ecdsa)",
+    "Read(~/.config/gh/hosts.yml)", "Read(~/.docker/config.json)", "Read(~/.kube/config)", "Read(~/.npmrc)",
+    "Read(~/.netrc)", "Read(~/.pypirc)", "Read(~/.cache/no-leaky/vault.json)", "Read(~/.config/no-leaky/data.key)",
+]
+SIDECAR = "no-leaky-permissions.json"  # which deny rules no-leaky added, so uninstall never removes the user's own
 PYTHON = None
 SHIM_MARK = "# no-leaky shim"
 
@@ -130,6 +141,39 @@ def install(s, no_wrap=()):
         ups.append({"hooks": [{"type": "command", "command": _cmd("prompt_guard.py")}]})
         changes.append("UserPromptSubmit: added prompt_guard.py")
     return changes
+
+
+def add_deny(s):
+    """Add the missing DENY_RULES to settings dict s. Returns the rules added."""
+    perms = s.setdefault("permissions", {})
+    if not isinstance(perms, dict):
+        return []
+    deny = perms.setdefault("deny", [])
+    if not isinstance(deny, list):
+        return []
+    added = [r for r in DENY_RULES if r not in deny]
+    deny.extend(added)
+    return added
+
+
+def remove_deny(s, rules):
+    """Remove the given deny rules, and the keys left empty."""
+    perms = s.get("permissions")
+    if not isinstance(perms, dict) or not isinstance(perms.get("deny"), list):
+        return
+    perms["deny"] = [r for r in perms["deny"] if r not in rules]
+    if not perms["deny"]:
+        del perms["deny"]
+    if not perms:
+        del s["permissions"]
+
+
+def _sidecar_rules(cfgdir):
+    try:
+        with open(os.path.join(cfgdir, SIDECAR)) as f:
+            return [r for r in json.load(f).get("deny", []) if isinstance(r, str)]
+    except (OSError, ValueError, AttributeError):
+        return []
 
 
 def uninstall(s):
@@ -265,6 +309,10 @@ def _check(targets):
         except ValueError:
             problems.append(f"{path} is not valid JSON")
             continue
+        deny = (s.get("permissions") or {}).get("deny") or []
+        missing = [r for r in DENY_RULES if r not in deny]
+        if missing:
+            problems.append(f"{path}: permissions.deny lacks {', '.join(missing)}; run install.py again")
         hooks = s.get("hooks") or {}
         for event, script in (("PreToolUse", "guard.py"), ("PostToolUse", "filter.py"),
                               ("UserPromptSubmit", "prompt_guard.py")):
@@ -293,6 +341,7 @@ def _uninstall_one(cfgdir, dry):
         print(f"{path} is not valid JSON; fix it first, nothing changed.")
         return 1
     uninstall(new)
+    remove_deny(new, _sidecar_rules(cfgdir))
     backups = sorted(n for n in os.listdir(cfgdir) if n.startswith("settings.json.no-leaky-backup-")) \
         if os.path.isdir(cfgdir) else []
     text = json.dumps(new, indent=2) + "\n"
@@ -308,6 +357,10 @@ def _uninstall_one(cfgdir, dry):
         print("would remove the no-leaky hooks from " + path)
         return 0
     _write(path, text)
+    try:
+        os.remove(os.path.join(cfgdir, SIDECAR))
+    except FileNotFoundError:
+        pass
     print(f"removed the no-leaky hooks from {path}")
     return 0
 
@@ -323,6 +376,10 @@ def _install_one(cfgdir, no_wrap, dry):
         return 1, False
     new = json.loads(json.dumps(old))
     changes = install(new, no_wrap)
+    added = add_deny(new)
+    if added:
+        changes.append(f"permissions.deny: added {len(added)} Read rules, so Claude Code itself blocks those files "
+                       "if a hook is ever missing")
     if not changes:
         print(f"already installed in {path}")
         return 0, False
@@ -335,6 +392,9 @@ def _install_one(cfgdir, no_wrap, dry):
         _write(backup, raw, mode_from=path)
         print(f"backup: {backup}")
     _write(path, json.dumps(new, indent=2) + "\n")
+    if added:
+        side = sorted(set(_sidecar_rules(cfgdir)) | set(added), key=DENY_RULES.index)
+        _write(os.path.join(cfgdir, SIDECAR), json.dumps({"deny": side}, indent=2) + "\n")
     print("changed " + path + ":", *changes, sep="\n- ")
     return 0, True
 
@@ -624,6 +684,41 @@ def test():
         check(f"not a shim or venv: {shim}", _python(lambda n, s=shim: s, ok_version) != shim)
     check("an old python3 is skipped", _python(lambda n: "/usr/bin/python3", lambda exe: False) != "/usr/bin/python3")
     check("no python3 on PATH falls back", bool(_python(lambda n: None, ok_version)))
+
+    # v0.2.4: Claude Code's own Read deny rules as a backup layer if a hook is ever missing
+    perm = os.path.join(tmp_bin, "perm")
+    os.makedirs(perm)
+    mine = {"permissions": {"deny": ["Read(**/.env)", "Bash(rm -rf *)"], "allow": ["Bash(npm test)"]}}
+    raw_perm = json.dumps(mine, indent=2) + "\n"
+    with open(os.path.join(perm, "settings.json"), "w") as f:
+        f.write(raw_perm)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        main(["--config-dir", perm], run_tests=False)
+    got = json.load(open(os.path.join(perm, "settings.json")))["permissions"]
+    check("deny rules added", all(r in got["deny"] for r in DENY_RULES))
+    check("no duplicate deny rules", len(got["deny"]) == len(set(got["deny"])))
+    check("the user's own rules kept", "Bash(rm -rf *)" in got["deny"] and got["allow"] == ["Bash(npm test)"])
+    check("templates stay readable", not any(".example" in r or r.endswith(".env.*)") for r in DENY_RULES))
+    check("the change is listed", "deny" in out.getvalue())
+    with contextlib.redirect_stdout(io.StringIO()):
+        code = main(["--config-dir", perm, "--check"], run_tests=False)
+    check("check passes with the deny rules", code == 0)
+    trimmed = json.load(open(os.path.join(perm, "settings.json")))
+    trimmed["permissions"]["deny"] = [r for r in trimmed["permissions"]["deny"] if r != DENY_RULES[-1]]
+    with open(os.path.join(perm, "settings.json"), "w") as f:
+        json.dump(trimmed, f)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = main(["--config-dir", perm, "--check"], run_tests=False)
+    check("check names a missing deny rule", code == 1 and DENY_RULES[-1] in out.getvalue())
+    with contextlib.redirect_stdout(io.StringIO()):
+        main(["--config-dir", perm], run_tests=False)
+        main(["--config-dir", perm, "--uninstall"], run_tests=False)
+    after = json.load(open(os.path.join(perm, "settings.json")))
+    check("uninstall removes only the rules no-leaky added",
+          after.get("permissions", {}).get("deny") == ["Read(**/.env)", "Bash(rm -rf *)"])
+    check("uninstall keeps the user's allow rules", after["permissions"].get("allow") == ["Bash(npm test)"])
 
     BIN_DIR, CLAUDE_HOME = real_bin, real_home
     __import__("shutil").rmtree(tmp_bin, ignore_errors=True)
