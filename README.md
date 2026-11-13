@@ -100,11 +100,16 @@ It shows what `install.py --dry-run` would change and installs after you say yes
 python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py --dry-run
 python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py              # backs up settings.json first
 python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py --uninstall
+python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py --check       # are the hooks still there and runnable?
 ```
 
 It honors `CLAUDE_CONFIG_DIR`. If another hook already rewrites tool output on the same tools, the installer runs it through the filter (`filter.py --after '<its command>'`), because Claude Code keeps only the rewrite that finishes last. A hook that never rewrites output does not need this, and wrapping one that reads its parent pid or is managed by another app breaks it. Leave those alone with `--no-wrap '<part of its command>'`.
 
-Without `-g`, the skills land inside whichever project you ran the command from. Python 3.9 or later, standard library only.
+Without `-g`, the skills land inside whichever project you ran the command from.
+
+If your Claude Code runs inside an app that keeps its own profile (Orca does), that app may re-copy `~/.claude/settings.json` over the profile's settings. The installer notices and puts the hooks in both places, so the next copy keeps them.
+
+Requirements: Python 3.9 or later, standard library only (macOS has it with the Xcode Command Line Tools or Homebrew; most Linux distributions ship it), and Node.js 22.20 or later for `npx skills add`. macOS and Linux; Windows is not supported yet. The hooks run `python3` from your PATH when it is a real install, so a Python upgrade does not break them; `--check` says so if it ever does.
 
 ## Using them
 

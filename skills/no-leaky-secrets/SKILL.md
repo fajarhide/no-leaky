@@ -37,6 +37,7 @@ Rules behind the table:
 1. Run `python3 <this skill's folder>/scripts/install.py --dry-run` and show the user every line it would change.
 2. If a listed PostToolUse hook only reports status and never rewrites output (an app's own status or notification hook), add `--no-wrap '<part of its command>'`.
 3. On a yes, run it again without `--dry-run`. It backs up `settings.json` first. The hooks take effect in the next session.
+4. Run `install.py --check` and tell the user the result. If it ever reports a missing hook or interpreter, run the install again.
 
 `install.py --uninstall` takes them out again.
 
