@@ -1,5 +1,7 @@
 # no-leaky
 
+[![test](https://github.com/fajarhide/no-leaky/actions/workflows/test.yml/badge.svg)](https://github.com/fajarhide/no-leaky/actions/workflows/test.yml)
+
 <p align="center"><img src="assets/poster.png" width="840" alt="A .env file whose values are blacked out, dripping amber onto caution tape that reads CAUGHT BY NO-LEAKY. Beside it: What your agent sees, its provider gets. Your agent just sent your .env to the AI provider. no-leaky stops it before it leaves your machine: blocks the read that would print it, redacts any key that still shows up, finds what already leaked. npx skills add fajarhide/no-leaky -g"></p>
 
 Stop your AI agent leaking your secrets.
@@ -66,7 +68,7 @@ Asked whether their coding agent may read `.env`, about 60 developers in Novembe
 | "I told it not to read it" | A rule in the prompt is a request. Agents `cat .env` while debugging something else. | The guard denies the read before it runs. |
 | "Are you sure it never did?" | Nobody is, without reading the tool calls. | The scan reads past transcripts and lists every secret that went through, by fingerprint. |
 | "Prod values are different" | Until one prod key gets copied into a local file to reproduce a bug. | Every value in an `.env` file on this machine is known by hash, so that key is caught wherever it turns up later. |
-| "The app sources the env, the agent never sees it" | Until a stack trace prints the config. | The filter redacts secrets in Bash, Read and Grep output. |
+| "The app sources the env, the agent never sees it" | Until a stack trace prints the config. | The filter redacts secrets in Bash, Read, Grep and MCP output. |
 | "We use a secret manager" | An agent that can run `infisical run -- env` holds the secret too. | The guard denies env dumps: `printenv`, `env`, `export -p`, `/proc/*/environ`. |
 | "I tell it to forget afterwards" | Forgetting is a chat feature. The provider already has the value. | Stop it before the model. For what already went through, the scan says what to rotate. |
 | "It only reads, it never commits" | `git add .env` puts it in history, which outlives the file. | The guard denies staging credential files. |
@@ -128,11 +130,11 @@ The hooks do not depend on the model choosing a skill. Once installed, they run 
 
 | Hook | Event | What it does |
 | --- | --- | --- |
-| `guard.py` | PreToolUse on Bash, Read, Grep | Denies a command that would print a credential source (`.env`, token files, private keys, `printenv`, `docker inspect`, `ps aux`, `crontab -l`, `gh auth token`, `kubectl get secret -o`), and `git add` of a credential file. The denial gives the safe way to do the same thing. |
-| `filter.py` | PostToolUse on Bash, Read, Grep | Replaces any secret that still got through with `[secret: <kind>, fp <8 hex>]` and leaves the rest of the output alone. |
+| `guard.py` | PreToolUse on Bash, Read, Grep, Edit, Write | Denies a command that would print a credential source (`.env`, token files, private keys, `printenv`, `docker inspect`, `ps aux`, `crontab -l`, `gh auth token`, `kubectl get secret -o`), and `git add` of a credential file. The denial gives the safe way to do the same thing. |
+| `filter.py` | PostToolUse on Bash, Read, Grep and MCP tools | Replaces any secret that still got through with `[secret: <kind>, fp <8 hex>]` and leaves the rest of the output alone. |
 | `prompt_guard.py` | UserPromptSubmit | Holds back a message you typed that carries a secret. Start it with `secret-ok:` to send it anyway. |
 
-What the guard still allows: `set -a; . ./.env; set +a; npm start`, `curl -H "Authorization: Bearer $(cat ~/.token)"`, `jq --rawfile`, a pipe into `ssh`, a redirect to a file, `wc`, `shasum`, `cmp`, `grep -c`, `git add .env.example`. Its self-check holds 38 commands it must deny and 39 it must allow.
+What the guard still allows: `set -a; . ./.env; set +a; npm start`, `curl -H "Authorization: Bearer $(cat ~/.token)"`, `jq --rawfile`, a pipe into `ssh`, a redirect to a file, `wc`, `shasum`, `cmp`, `grep -c`, `pgrep -f`, `git add .env.example`. Its self-check holds 38 commands it must deny and 39 it must allow.
 
 The filter caught keys the redaction layer in front of it missed. Seven fake vendor keys in one Bash output went through a token optimizer's post-hook first: it redacted 3 and passed 4 on raw. Chained behind it with `--after`, `filter.py` redacted the other 4, so 7 of 7 left as fingerprints. One run on one output, reported upstream.
 
@@ -186,8 +188,7 @@ Measured on Claude Code 2.1.322:
 - The output filter covers Bash, Read, Grep and MCP tools. WebFetch is not filtered yet.
 - A blocked prompt never reaches the model, but Claude Code still writes one copy into the local transcript.
 - A running session does not pick up new hooks. They take effect in the next one.
-- Asking how a process was started fails: `ps` with arguments is denied, and the agent may then wrongly report the process is not running. 3 of 3 in the bench.
-- The guard knows `docker inspect` but not `podman inspect`. The filter is the only net there.
+- The guard keeps process arguments from the agent. It finds a process with `pgrep -f` but cannot see how one was started. Before v0.2.2 the bench's worker task failed 3 of 3 here; the denial now points to `pgrep -f`.
 - Personal data detection covers structured values only. Names of people, street addresses and free text such as medical notes are not detected.
 - Landline numbers written without `+` are not detected.
 - A client name inside a path, URL or git remote stays readable, so `cd` and `git` keep working. It still reaches the provider.

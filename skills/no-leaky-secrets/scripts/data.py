@@ -156,7 +156,9 @@ def _candidates(text, cfg):
 def _emails(text):
     for m in EMAIL.finditer(text):
         local, domain, tld = m.group(1), m.group(2).lower(), m.group(3).lower()
-        if tld in SKIP_TLD or domain in SKIP_DOMAIN or local.lower().startswith(("noreply", "no-reply")):
+        lowered = local.lower()
+        if (tld in SKIP_TLD or any(domain == d or domain.endswith("." + d) for d in SKIP_DOMAIN)
+                or "noreply" in lowered or "no-reply" in lowered or domain.endswith("noreply.github.com")):
             continue
         if re.match(r":[\w~./-]", text[m.end():m.end() + 2]):  # git@host:org/repo is a remote, not an address
             continue
@@ -174,6 +176,10 @@ def _numbers(text):
         s, e = w.start(), min(len(text), w.end() + 1)  # one char past the run so lookaheads see it
         for rx in (PHONE_INTL, PHONE_ID):
             for m in rx.finditer(text, s, e):
+                # A real international number has 10+ digits; "+12345678,100" is a diff hunk, "+1234567" an offset.
+                if rx is PHONE_INTL and (len(re.sub(r"\D", "", m.group())) < 10
+                                         or re.match(r"[,.]\d", text[m.end():m.end() + 2])):
+                    continue
                 yield "phone", m.start(), m.end()
         for m in DIGITS16.finditer(text, s, e):
             if _nik(m.group()):
@@ -200,6 +206,9 @@ def _ips(text):
             continue
         ip = m.group()
         if ip.startswith("127.") or ip in ("0.0.0.0", "255.255.255.255") or ip.startswith(DOC_NETS):
+            continue
+        bits = "".join(f"{int(p):08b}" for p in parts)
+        if parts[0] == "255" and "01" not in bits:  # a netmask such as 255.255.255.0, not an address
             continue
         before = text[max(0, m.start() - 10):m.start()]
         if before[-1:] in ("v", "V", "@") or VERSION_NEAR.search(before):
@@ -339,6 +348,13 @@ def test():
             check("short key refused", False)
         except ValueError:
             pass
+
+    # v0.2.2: everyday output that is not personal data
+    for clean in ("@@ -1,5 +12345678,100 @@", "offset +1234567", "uptime +12345678 s", "netmask 255.255.255.0",
+                  "mask 255.255.240.0", "12345+someone@users.noreply.github.com", "ci@build.example.com",
+                  "dev@mail.example.org"):
+        check(f"v0.2.2 left alone: {clean}", find_data(clean, cfg, key) == [])
+    check("intl phone still found", [f.kind for f in find_data("call +44 20 7946 0958 now", cfg, key)] == ["phone"])
 
     owner = fake_data("email")
     allow_cfg = dict(cfg, data_allow=[owner.upper()])

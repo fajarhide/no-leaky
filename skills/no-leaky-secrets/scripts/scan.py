@@ -310,7 +310,8 @@ def main(argv, cfg=None, home=None, config_dir=None, key=None):
     with open(args.report, "w") as f:
         f.write(text)
     print(f"\nreport: {args.report}")
-    return 1 if any(lk["tier"] != "public" and not lk["ignored"] for lk in res["leaks"].values()) else 0
+    # Data rows are reported but do not fail the run: your own email in git log would fail it forever.
+    return 1 if any(lk["tier"] in ("certain", "likely") and not lk["ignored"] for lk in res["leaks"].values()) else 0
 
 
 def test():
@@ -449,7 +450,14 @@ def test():
                                                           for l in rep.splitlines()))
         check("data value never shown", nik not in rep and nik not in out.getvalue() and gh not in rep)
         check("secret still listed", "## Certain, act on these (1)" in rep)
-        check("exit 1 with data", code == 1)
+        check("exit 1 with data", code == 1)  # the secret in the same session fails it
+        only = os.path.join(tmp, "s-only-data.jsonl")
+        with open(only, "w") as f:
+            f.write(line(type="user", message={"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "d1", "content": f"1|{data.fake_data('email')}\n"}]}) + "\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = main(["--session", only, "--report", report], cfg=cfg, home=home, config_dir=cfgdir, key=dkey)
+        check("data rows alone exit 0", code == 0 and "## Personal and business data (1)" in open(report).read())
         shutil.rmtree(cfgdir)
 
     if bad:
