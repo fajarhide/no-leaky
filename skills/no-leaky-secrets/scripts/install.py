@@ -6,6 +6,8 @@ Self-check: python3 install.py --test
 """
 
 import json
+import re
+import shutil
 import os
 import shlex
 import subprocess
@@ -19,11 +21,43 @@ GUARD_TOOLS = TOOLS + ("Edit", "Write")  # Edit and Write: a data token must not
 OURS = ("guard.py", "filter.py", "prompt_guard.py")
 REPORT = "no-leaky-report.md"
 BIN_DIR = os.path.expanduser("~/.local/bin")
+CLAUDE_HOME = os.path.expanduser("~/.claude")
+PYTHON = None
 SHIM_MARK = "# no-leaky shim"
 
 
+def _version_ok(exe):
+    try:
+        out = subprocess.run([exe, "-c", "import sys; print(sys.version_info >= (3, 9))"], capture_output=True,
+                             text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out == "True"
+
+
+def _python(which=shutil.which, version_ok=_version_ok):
+    """The interpreter the hooks run with. python3 on PATH (such as /opt/homebrew/bin/python3) survives a minor
+    upgrade that removes the versioned path this installer may run from; a shim or a venv does not, and a pyenv shim
+    can pick another version per directory."""
+    exe = which("python3")
+    if exe and not re.search(r"/(?:shims|\.pyenv|\.asdf|\.?venv|virtualenvs)/", exe) and version_ok(exe):
+        return exe
+    if sys.prefix != sys.base_prefix:  # running inside a venv: use the interpreter it was made from
+        base = os.path.join(sys.base_prefix, "bin", f"python{sys.version_info[0]}.{sys.version_info[1]}")
+        if os.path.exists(base):
+            return base
+    return sys.executable
+
+
+def _py():
+    global PYTHON
+    if PYTHON is None:
+        PYTHON = _python()
+    return PYTHON
+
+
 def _cmd(script, *extra):
-    return " ".join(shlex.quote(x) for x in (sys.executable, os.path.join(HERE, script)) + extra)
+    return " ".join(shlex.quote(x) for x in (_py(), os.path.join(HERE, script)) + extra)
 
 
 def _tokens(command):
@@ -144,7 +178,7 @@ def _shim(dry=False, remove=False):
         return f"removed {path}" if ours else None
     if os.path.exists(path) and not ours:
         return f"{path} exists and is not ours; left alone. Call {os.path.join(HERE, 'nl_run.py')} directly."
-    text = f'#!/bin/sh\n{SHIM_MARK}\nexec {shlex.quote(sys.executable)} {shlex.quote(os.path.join(HERE, "nl_run.py"))} "$@"\n'
+    text = f'#!/bin/sh\n{SHIM_MARK}\nexec {shlex.quote(_py())} {shlex.quote(os.path.join(HERE, "nl_run.py"))} "$@"\n'
     if ours and open(path).read() == text:
         return None
     if dry:
@@ -169,6 +203,142 @@ def _gitignore():
         print(f"- .gitignore: added {REPORT}")
 
 
+def _same_settings(a, b):
+    """Equal once the order of hook groups is ignored (Orca moves its own groups to the end when it re-copies)."""
+    def norm(path):
+        with open(path) as f:
+            s = json.load(f)
+        hooks = s.get("hooks")
+        if isinstance(hooks, dict):
+            s["hooks"] = {ev: sorted((json.dumps(g, sort_keys=True) for g in groups), key=str)
+                          for ev, groups in hooks.items() if isinstance(groups, list)}
+        return s
+    try:
+        return norm(a) == norm(b)
+    except (OSError, ValueError):
+        return False
+
+
+def _mirrors_home(cfgdir):
+    """True when the config dir links into ~/.claude (skills, projects, hooks): a profile an app builds from it."""
+    home = os.path.realpath(CLAUDE_HOME)
+    try:
+        names = os.listdir(cfgdir)
+    except OSError:
+        return False
+    for n in names:
+        full = os.path.join(cfgdir, n)
+        if os.path.islink(full) and os.path.realpath(full).startswith(home + os.sep):
+            return True
+    return False
+
+
+def _targets(cfgdir):
+    """The config dirs to change. An app that keeps a profile (Orca does) re-copies ~/.claude/settings.json over the
+    profile's own; then the hooks go into the source as well, or the next copy wipes them."""
+    a, b = os.path.join(cfgdir, "settings.json"), os.path.join(CLAUDE_HOME, "settings.json")
+    if os.path.realpath(cfgdir) == os.path.realpath(CLAUDE_HOME) or not os.path.isfile(b):
+        return [cfgdir]
+    if os.path.isfile(a) and os.path.samefile(a, b):
+        return [cfgdir]
+    if (os.path.isfile(a) and _same_settings(a, b)) or _mirrors_home(cfgdir):
+        return [CLAUDE_HOME, cfgdir]
+    return [cfgdir]
+
+
+def _installed_copy(command, script):
+    """Our script from any copy of no-leaky (repo, npx install), for --check."""
+    return [t for t in _tokens(command) if t.replace(os.sep, "/").endswith("no-leaky-secrets/scripts/" + script)]
+
+
+def _check(targets):
+    """Problems with the installed hooks, as lines for the user. Empty means healthy."""
+    problems = []
+    for d in targets:
+        path = os.path.join(d, "settings.json")
+        try:
+            with open(path) as f:
+                s = json.load(f)
+        except FileNotFoundError:
+            problems.append(f"{path} does not exist")
+            continue
+        except ValueError:
+            problems.append(f"{path} is not valid JSON")
+            continue
+        hooks = s.get("hooks") or {}
+        for event, script in (("PreToolUse", "guard.py"), ("PostToolUse", "filter.py"),
+                              ("UserPromptSubmit", "prompt_guard.py")):
+            cmds = [h.get("command", "") for g in hooks.get(event, []) for h in g.get("hooks", [])
+                    if h.get("type") == "command" and _installed_copy(h.get("command", ""), script)]
+            if not cmds:
+                problems.append(f"{path}: {script} is not installed ({event})")
+            for c in cmds:
+                exe = _tokens(c)[0]
+                if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+                    problems.append(f"{path}: {script} runs {exe}, which no longer exists; run install.py again")
+                for sp in _installed_copy(c, script):
+                    if not os.path.isfile(sp):
+                        problems.append(f"{path}: {sp} no longer exists; run install.py again")
+    if not os.path.exists(os.path.join(BIN_DIR, "nl-run")):
+        problems.append(f"{os.path.join(BIN_DIR, 'nl-run')} is missing, so the agent cannot use data tokens")
+    return problems
+
+
+def _uninstall_one(cfgdir, dry):
+    path = os.path.join(cfgdir, "settings.json")
+    raw = open(path).read() if os.path.exists(path) else None
+    try:
+        new = json.loads(raw) if raw else {}
+    except ValueError:
+        print(f"{path} is not valid JSON; fix it first, nothing changed.")
+        return 1
+    uninstall(new)
+    backups = sorted(n for n in os.listdir(cfgdir) if n.startswith("settings.json.no-leaky-backup-")) \
+        if os.path.isdir(cfgdir) else []
+    text = json.dumps(new, indent=2) + "\n"
+    if backups:
+        with open(os.path.join(cfgdir, backups[-1])) as f:
+            kept = f.read()
+        try:
+            if json.loads(kept or "{}") == new:
+                text = kept
+        except ValueError:
+            pass
+    if dry:
+        print("would remove the no-leaky hooks from " + path)
+        return 0
+    _write(path, text)
+    print(f"removed the no-leaky hooks from {path}")
+    return 0
+
+
+def _install_one(cfgdir, no_wrap, dry):
+    """Returns (exit code, changed)."""
+    path = os.path.join(cfgdir, "settings.json")
+    raw = open(path).read() if os.path.exists(path) else None
+    try:
+        old = json.loads(raw) if raw else {}
+    except ValueError:
+        print(f"{path} is not valid JSON; fix it first, nothing changed.")
+        return 1, False
+    new = json.loads(json.dumps(old))
+    changes = install(new, no_wrap)
+    if not changes:
+        print(f"already installed in {path}")
+        return 0, False
+    if dry:
+        print("would change " + path + ":", *changes, sep="\n- ")
+        return 0, False
+    os.makedirs(cfgdir, exist_ok=True)
+    if raw is not None:
+        backup = f"{path}.no-leaky-backup-{time.strftime('%Y%m%d-%H%M%S')}"
+        _write(backup, raw, mode_from=path)
+        print(f"backup: {backup}")
+    _write(path, json.dumps(new, indent=2) + "\n")
+    print("changed " + path + ":", *changes, sep="\n- ")
+    return 0, True
+
+
 def main(argv, run_tests=True):
     import argparse
     import copy
@@ -177,38 +347,30 @@ def main(argv, run_tests=True):
     ap.add_argument("--config-dir")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--uninstall", action="store_true")
+    ap.add_argument("--check", action="store_true", help="report whether the hooks are installed and can run")
     ap.add_argument("--no-wrap", action="append", default=[], metavar="TEXT",
                     help="leave PostToolUse hooks whose command contains TEXT unwrapped")
     args = ap.parse_args(argv)
-    cfgdir = os.path.expanduser(args.config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
-    path = os.path.join(cfgdir, "settings.json")
-    raw = open(path).read() if os.path.exists(path) else None
-    try:
-        old = json.loads(raw) if raw else {}
-    except ValueError:
-        print(f"{path} is not valid JSON; fix it first, nothing changed.")
-        return 1
-    new = copy.deepcopy(old)
+    cfgdir = os.path.expanduser(args.config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or CLAUDE_HOME)
+    targets = _targets(cfgdir)
+    if args.check:
+        problems = _check(targets)
+        for line in problems:
+            print("- " + line)
+        if not problems:
+            print("ok: the no-leaky hooks are installed in " + " and ".join(os.path.join(d, "settings.json") for d in targets))
+        return 1 if problems else 0
+    if len(targets) > 1:
+        print(f"{os.path.join(cfgdir, 'settings.json')} is a copy of {os.path.join(CLAUDE_HOME, 'settings.json')}, which an "
+              "app re-copies over it; changing both so the hooks survive the next copy.")
 
     if args.uninstall:
-        uninstall(new)
-        backups = sorted(n for n in os.listdir(cfgdir) if n.startswith("settings.json.no-leaky-backup-")) \
-            if os.path.isdir(cfgdir) else []
-        text = json.dumps(new, indent=2) + "\n"
-        if backups:
-            with open(os.path.join(cfgdir, backups[-1])) as f:
-                kept = f.read()
-            if json.loads(kept or "{}") == new:
-                text = kept
-        if args.dry_run:
-            print("would remove the no-leaky hooks from " + path)
-            return 0
-        _write(path, text)
-        print(f"removed the no-leaky hooks from {path}")
-        shim = _shim(remove=True)
-        if shim:
-            print(shim)
-        return 0
+        code = max(_uninstall_one(d, args.dry_run) for d in targets)
+        if not args.dry_run:
+            shim = _shim(remove=True)
+            if shim:
+                print(shim)
+        return code
 
     if run_tests:
         for script in OURS + ("detect.py",):
@@ -216,26 +378,16 @@ def main(argv, run_tests=True):
             if r.returncode != 0:
                 print(f"{script} --test failed; nothing changed.\n{r.stdout[-2000:]}")
                 return 1
-    changes = install(new, args.no_wrap)
+    code, changed = 0, False
+    for d in targets:
+        c, ch = _install_one(d, args.no_wrap, args.dry_run)
+        code, changed = max(code, c), changed or ch
     shim = _shim(dry=args.dry_run)
     if shim:
         print(shim)
-    if not changes:
-        print(f"already installed in {path}")
-        return 0
-    if args.dry_run:
-        print("would change " + path + ":", *changes, sep="\n- ")
-        return 0
-    os.makedirs(cfgdir, exist_ok=True)
-    if raw is not None:
-        backup = f"{path}.no-leaky-backup-{time.strftime('%Y%m%d-%H%M%S')}"
-        _write(backup, raw, mode_from=path)
-        print(f"backup: {backup}")
-    _write(path, json.dumps(new, indent=2) + "\n")
-    print("changed " + path + ":", *changes, sep="\n- ")
-    _gitignore()
-    return 0
-
+    if changed:
+        _gitignore()
+    return code
 
 def test():
     import contextlib
@@ -248,10 +400,11 @@ def test():
         if not cond:
             bad.append(label)
 
-    global BIN_DIR
-    real_bin = BIN_DIR
+    global BIN_DIR, CLAUDE_HOME
+    real_bin, real_home = BIN_DIR, CLAUDE_HOME
     tmp_bin = tempfile.mkdtemp()
     BIN_DIR = os.path.join(tmp_bin, "bin")  # never touch the real ~/.local/bin from a self-check
+    CLAUDE_HOME = os.path.join(tmp_bin, "home-claude")  # nor the real ~/.claude
     other_post = "other-rewriter --post-hook"
     original = {
         "env": {"SOME_FLAG": "1"},
@@ -396,7 +549,83 @@ def test():
         with open(settings) as f:
             check("dry run writes nothing", f.read() == raw and code == 0 and not os.path.exists(shim_path))
 
-    BIN_DIR = real_bin
+    # v0.2.3: a profile whose settings.json an app re-copies from ~/.claude/settings.json (Orca does)
+    base = {"hooks": {"PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "status-hook"}]}]}}
+    os.makedirs(CLAUDE_HOME, exist_ok=True)
+    profile = os.path.join(tmp_bin, "profile")
+    os.makedirs(profile)
+    text = json.dumps(base, indent=2) + "\n"
+    for d in (CLAUDE_HOME, profile):
+        with open(os.path.join(d, "settings.json"), "w") as f:
+            f.write(text)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        main(["--config-dir", profile, "--no-wrap", "status-hook"], run_tests=False)
+    src, cp = (json.load(open(os.path.join(d, "settings.json"))) for d in (CLAUDE_HOME, profile))
+    has_guard = lambda s: any("guard.py" in h["command"] for g in s["hooks"].get("PreToolUse", []) for h in g["hooks"])  # noqa: E731
+    check("synced profile: hooks go into the source too", has_guard(src) and has_guard(cp))
+    check("synced profile: the user is told why", "copy" in out.getvalue())
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = main(["--config-dir", profile, "--check"], run_tests=False)
+    check("check passes on a healthy install", code == 0 and "ok" in out.getvalue())
+    src["hooks"]["PreToolUse"] = []
+    with open(os.path.join(CLAUDE_HOME, "settings.json"), "w") as f:
+        json.dump(src, f)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = main(["--config-dir", CLAUDE_HOME, "--check"], run_tests=False)
+    check("check fails and names the missing hook", code == 1 and "guard.py" in out.getvalue())
+    broken = json.load(open(os.path.join(profile, "settings.json")))
+    for g in broken["hooks"]["UserPromptSubmit"]:
+        for h in g["hooks"]:
+            h["command"] = h["command"].replace(shlex.split(h["command"])[0], "/nonexistent/python3", 1)
+    with open(os.path.join(profile, "settings.json"), "w") as f:
+        json.dump(broken, f)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = main(["--config-dir", profile, "--check"], run_tests=False)
+    check("check fails when the interpreter is gone", code == 1 and "/nonexistent/python3" in out.getvalue())
+
+    # Orca rewrites the copy with its own hook groups moved to the end: same content, other order.
+    two = {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "app-hook"}]},
+                                    {"matcher": "Bash", "hooks": [{"type": "command", "command": "user-hook"}]}]}}
+    swapped = {"hooks": {"PreToolUse": list(reversed(two["hooks"]["PreToolUse"]))}}
+    reordered = os.path.join(tmp_bin, "reordered")
+    os.makedirs(reordered)
+    with open(os.path.join(CLAUDE_HOME, "settings.json"), "w") as f:
+        json.dump(two, f)
+    with open(os.path.join(reordered, "settings.json"), "w") as f:
+        json.dump(swapped, f)
+    check("a reordered copy is still a copy", _targets(reordered) == [CLAUDE_HOME, reordered])
+    # A profile that mirrors ~/.claude through symlinks is managed by an app even if its settings drifted.
+    mirrored = os.path.join(tmp_bin, "mirrored")
+    os.makedirs(mirrored)
+    os.makedirs(os.path.join(CLAUDE_HOME, "skills"), exist_ok=True)
+    os.symlink(os.path.join(CLAUDE_HOME, "skills"), os.path.join(mirrored, "skills"))
+    with open(os.path.join(mirrored, "settings.json"), "w") as f:
+        f.write('{"model": "drifted"}\n')
+    check("a profile with symlinks into ~/.claude counts as a copy", _targets(mirrored) == [CLAUDE_HOME, mirrored])
+
+    lone = os.path.join(tmp_bin, "lone")
+    os.makedirs(lone)
+    with open(os.path.join(lone, "settings.json"), "w") as f:
+        f.write('{"model": "x"}\n')
+    before = open(os.path.join(CLAUDE_HOME, "settings.json")).read()
+    with contextlib.redirect_stdout(io.StringIO()):
+        main(["--config-dir", lone], run_tests=False)
+    check("a profile that is not a copy leaves the source alone",
+          open(os.path.join(CLAUDE_HOME, "settings.json")).read() == before)
+
+    # the interpreter written into hooks survives upgrades and is never a shim or a venv
+    ok_version = lambda exe: True  # noqa: E731
+    check("python3 on PATH is preferred", _python(lambda n: "/usr/local/bin/python3", ok_version) == "/usr/local/bin/python3")
+    for shim in ("/home/u/.pyenv/shims/python3", "/home/u/.asdf/shims/python3", "/w/app/.venv/bin/python3"):
+        check(f"not a shim or venv: {shim}", _python(lambda n, s=shim: s, ok_version) != shim)
+    check("an old python3 is skipped", _python(lambda n: "/usr/bin/python3", lambda exe: False) != "/usr/bin/python3")
+    check("no python3 on PATH falls back", bool(_python(lambda n: None, ok_version)))
+
+    BIN_DIR, CLAUDE_HOME = real_bin, real_home
     __import__("shutil").rmtree(tmp_bin, ignore_errors=True)
 
     # Every SKILL.md must parse as YAML front matter, or skill installers skip it without a word.
