@@ -3,7 +3,7 @@
 All notable changes to no-leaky. Versions follow [Semantic Versioning](https://semver.org/): before 1.0.0, a minor
 version adds features and may change hook behavior, a patch version only fixes.
 
-## [0.2.2] - unreleased
+## [0.2.2] - 2026-11-13
 
 ### Fixed
 - A token-shaped string the vault never minted (a test fixture, a doc example) is no longer blocked in Write, Edit,
@@ -62,7 +62,7 @@ version adds features and may change hook behavior, a patch version only fixes.
 - The guard denies `git add` of a credential file.
 - `install.py --no-wrap` leaves a PostToolUse hook that never rewrites output unwrapped.
 
-[0.2.2]: https://github.com/fajarhide/no-leaky/compare/v0.2.1...HEAD
+[0.2.2]: https://github.com/fajarhide/no-leaky/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/fajarhide/no-leaky/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/fajarhide/no-leaky/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/fajarhide/no-leaky/releases/tag/v0.1.0
