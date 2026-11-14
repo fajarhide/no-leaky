@@ -14,7 +14,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # setup-python ships 3.9 for Ubuntu 22.04 and 24.04 only, not for 26.04 (ubuntu-latest since Nov 2026)
+          - os: ubuntu-24.04
             python: "3.9"
           - os: ubuntu-latest
             python: "3.13"
