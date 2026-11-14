@@ -3,6 +3,15 @@
 All notable changes to no-leaky. Versions follow [Semantic Versioning](https://semver.org/): before 1.0.0, a minor
 version adds features and may change hook behavior, a patch version only fixes.
 
+## [Unreleased]
+
+### Fixed
+- An email address stored as a value in a `.env` file (an allowlist, a sender address) is no longer learned as a
+  known secret, so `git config user.email` and every other place that address appears stop coming back as
+  `[secret: known, ...]`. Addresses are personal data and the data filter already turns them into `[email: k...]`
+  tokens. The known-values cache format moves to 3, and the hooks' ten-minute cache shortcut now rebuilds a cache
+  written in an older format instead of trusting it, so the fix applies on the first tool call after an upgrade.
+
 ## [0.2.4] - 2026-11-13
 
 ### Added

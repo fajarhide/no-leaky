@@ -58,6 +58,7 @@ FIXTURE = re.compile(r"^(?:tests?|testdata|spec|fixtures?|examples?|samples?|moc
                      r"|\.(?:example|sample|template|dist)(?:\.[\w-]+)?$", re.I)
 DOTTED = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$")
 WORDS = re.compile(r"^[A-Za-z_]+$")
+EMAIL_VALUE = re.compile(r"^[\w.%+-]+@[\w-]+(?:\.[\w-]+)+$")  # an address is data, not a credential
 
 
 def fingerprint(value):
@@ -119,6 +120,7 @@ def _name_before(text, start):
 
 CONFIG_PATH = os.path.expanduser("~/.config/no-leaky/config.json")
 CACHE_PATH = os.path.expanduser("~/.cache/no-leaky/known.json")
+KNOWN_FORMAT = 3  # bump when _source_values changes, so caches built by older rules are rebuilt
 DEFAULT_CONFIG = {"scan_roots": [], "extra_credential_globs": [], "safe_paths": [], "ignore": [],
                   "internal_names": [], "data_allow": [], "data_hosts": []}
 HOME_SOURCES = [".npmrc", ".aws/credentials", ".config/gh/hosts.yml", ".docker/config.json"]
@@ -185,7 +187,7 @@ def _source_values(path):
         if not val:
             continue
         if (len(val) < 16 or is_placeholder(val) or PUBLIC_NAME.search(name) or val[0] in "/~$"
-                or val.isdigit() or DOTTED.match(val) or WORDS.match(val)
+                or val.isdigit() or DOTTED.match(val) or WORDS.match(val) or EMAIL_VALUE.match(val)
                 or ("://" in val and not re.search(r"://[^/@\s]+:[^/@\s]+@", val))):
             continue
         out[hashlib.sha256(val.encode()).hexdigest()] = [name.rsplit("/", 1)[-1].lstrip(":"), len(val)]
@@ -202,8 +204,10 @@ def load_known(cfg, cache=CACHE_PATH, home=None, max_age=None):
         try:
             if time.time() - os.stat(cache).st_mtime < max_age:
                 with open(cache) as f:
-                    return _known_from(json.load(f))
-        except (OSError, ValueError, TypeError):
+                    stored = json.load(f)
+                if all(e.get("format") == KNOWN_FORMAT for e in stored.values()):  # an older format is rebuilt now
+                    return _known_from(stored)
+        except (OSError, ValueError, TypeError, AttributeError):
             pass
     try:
         with open(cache) as f:
@@ -217,8 +221,8 @@ def load_known(cfg, cache=CACHE_PATH, home=None, max_age=None):
         except OSError:
             continue
         entry = stored.get(path)
-        if not entry or entry.get("mtime") != mtime or entry.get("format") != 2:
-            entry, changed = {"mtime": mtime, "format": 2, "values": _source_values(path)}, True
+        if not entry or entry.get("mtime") != mtime or entry.get("format") != KNOWN_FORMAT:
+            entry, changed = {"mtime": mtime, "format": KNOWN_FORMAT, "values": _source_values(path)}, True
         fresh[path] = entry
     if changed or set(fresh) != set(stored):
         import tempfile
@@ -532,10 +536,12 @@ def test_known(check):
         home = os.path.join(tmp, "home")
         os.makedirs(home)
         value, short, example, nested = rand(24), rand(8), rand(24), rand(24)
+        email = rand(10).lower() + "@" + rand(8).lower() + ".co.id"
         env = os.path.join(root, "app", ".env")
         with open(env, "w") as f:
             f.write(f"MY_VAR={value}\nSHORT={short}\nAPP_URL=https://app.acmecorp.io/path/to\n"
-                    f"DB_HOST=db.internal.acmecorp\nNEXT_PUBLIC_KEY={rand(24)}\nexport QUOTED=\"{nested}\"\n")
+                    f"DB_HOST=db.internal.acmecorp\nNEXT_PUBLIC_KEY={rand(24)}\nexport QUOTED=\"{nested}\"\n"
+                    f"SIGNUP_ALLOWLIST={email}\n")
         with open(os.path.join(root, "app", ".env.example"), "w") as f:
             f.write(f"EX_VAR={example}\n")
         with open(os.path.join(root, "node_modules", "x", ".env"), "w") as f:
@@ -559,6 +565,7 @@ def test_known(check):
         check("known: npmrc", hashlib.sha256(npmrc_value.encode()).hexdigest() in known)
         check("known: short skipped", hashlib.sha256(short.encode()).hexdigest() not in known)
         check("known: example skipped", hashlib.sha256(example.encode()).hexdigest() not in known)
+        check("known: email skipped", hashlib.sha256(email.encode()).hexdigest() not in known)
         check("known: only real values", len(known) == 3)
         with open(cache) as f:
             blob = f.read()
@@ -592,6 +599,14 @@ def test_known(check):
             check("max_age: no walk", False)
         finally:
             globals()["known_sources"] = real_sources
+
+        old_hash = hashlib.sha256(rand(24).encode()).hexdigest()
+        with open(cache, "w") as f:  # a young cache built by older rules, holding a value they no longer learn
+            json.dump({env: {"mtime": os.stat(env).st_mtime, "format": KNOWN_FORMAT - 1,
+                             "values": {old_hash: ["OLD", 24]}}}, f)
+        quick = load_known(cfg, cache=cache, home=home, max_age=600)
+        check("max_age: older format rebuilt", old_hash not in quick
+              and hashlib.sha256(fresh.encode()).hexdigest() in quick)
 
         stale = time.time() - 3600
         os.utime(cache, (stale, stale))
