@@ -4,6 +4,12 @@
 
 <div align="center">
 
+# Stop your AI agent leaking your secrets
+
+<code>npx skills add fajarhide/no-leaky -g</code>
+
+[Install](#install) · [How it works](#how-it-works) · [Skills](#skills) · [Measured](#measured) · [Limits](#limits) · [FAQ](#faq) · [Changelog](CHANGELOG.md)
+
 [![test](https://img.shields.io/github/actions/workflow/status/fajarhide/no-leaky/test.yml?branch=main&style=flat-square&label=test)](https://github.com/fajarhide/no-leaky/actions/workflows/test.yml)
 [![release](https://img.shields.io/github/v/release/fajarhide/no-leaky?style=flat-square&color=f5a623&label=release)](https://github.com/fajarhide/no-leaky/releases)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?style=flat-square&logo=python&logoColor=white)](#install)
@@ -11,17 +17,81 @@
 [![skills.sh](https://www.skills.sh/b/fajarhide/no-leaky?style=flat-square)](https://www.skills.sh/fajarhide/no-leaky)
 [![MIT license](https://img.shields.io/badge/license-MIT-f4c430?style=flat-square)](LICENSE)
 
-**Stop your AI agent leaking your secrets.**
-
 </div>
+
+---
+
+Everything your coding agent sees goes to its provider: every command's output, every file it reads, every grep result. Telling it not to read `.env` does not stop it. Agents still run `cat .env` to check one setting, `docker inspect` on a broken container, or `ps aux` to find a process. **no-leaky** stops the next leak and finds the ones already there, for secrets and for your customers' personal data, while you keep working the way you do now. It runs on Claude Code, and the scan also reads Codex transcripts.
 
 <p align="center"><img src="assets/poster.png" width="840" alt="A .env file whose values are blacked out, dripping amber onto caution tape that reads CAUGHT BY NO-LEAKY. Beside it: What your agent sees, its provider gets. Your agent just sent your .env to the AI provider. no-leaky stops it before it leaves your machine: blocks the read that would print it, redacts any key that still shows up, finds what already leaked. npx skills add fajarhide/no-leaky -g"></p>
 
-Everything your coding agent sees goes to its provider: every command's output, every file it reads, every grep result. Telling it not to read `.env` does not stop it. Agents still run `cat .env` to check one setting, `docker inspect` on a broken container, or `ps aux` to find a process.
+## Before and after
 
-no-leaky stops the next leak and finds the ones already there, for secrets and for your customers' personal data. You keep working the way you do now. It runs on Claude Code, and the scan also reads Codex transcripts.
+We gave an agent ten everyday dev tasks, three times each, in a project seeded with fake keys, then five tasks on a shop with fake customers. Same tasks, same model, with and without the hooks.
 
-We gave an agent ten everyday dev tasks, three times each, in a project seeded with fake keys. Without no-leaky, 18 of 30 sessions sent at least one key to the provider. With it, 0 of 30, and 27 of 30 still got the right answer.
+| | Without no-leaky | With no-leaky |
+| --- | --- | --- |
+| Sessions that sent a key to the provider | 18 of 30 | 0 of 30 |
+| Sessions that sent customer data | 9 of 15 | 0 of 15 |
+
+With the hooks, 27 of 30 key sessions and 15 of 15 data sessions still got the right answer. Task by task in [Measured](#measured). The pairs below are the same agent action twice. The "with" side is what the hooks print, run on fake values.
+
+### The agent reads `.env`
+
+**Without:**
+
+```
+$ cat .env
+```
+
+Every line of the file, values included, lands in the transcript and goes to the provider.
+
+**With:** the guard denies it before it runs, and says how to do the same thing safely.
+
+```
+Blocked: this would print a credential source (.env) into the transcript. Do not retry with another filter,
+and do not redact it yourself: that is how it leaked often. Use it without printing: `. file`,
+`"$(cat file)"`, `jq --rawfile`, a pipe into the command that needs it, or a redirect to a file.
+To inspect: `wc -l`, `stat`, `shasum`, `cmp`, `grep -c`, and prove it works by its effect (HTTP status).
+If this is a false alarm, say so and ask the user to run it with `!`.
+```
+
+### A key turns up in output the guard allowed
+
+Reviewing the last commit leaked a key in 3 of 3 runs without no-leaky.
+
+**Without:** `git show HEAD` prints the diff, and the live key with it.
+
+```
++stripe:
++  secret_key: <the live key, in full>
++  currency: idr
+```
+
+**With:** the filter swaps the value for its kind and a fingerprint. The rest of the output is untouched.
+
+```
++stripe:
++  secret_key: [secret: stripe, fp 0dee314a]
++  currency: idr
+```
+
+### A query returns customer rows
+
+**Without:**
+
+```
+$ sqlite3 shop.db "select id, email, phone, nik from users where id = 4411"
+4411|<the customer's email>|<their phone number>|<their national ID>
+```
+
+**With:** each value arrives as a token. The agent can still act on it through `nl-run`, which swaps the value back inside its own process.
+
+```
+4411|[email: k3f9a01c27b4]|[phone: k0c5d9a2e3f8]|[nik: k5e21b7f04a6]
+
+$ nl-run -- sqlite3 shop.db "select id, status from orders where email = '[email: k3f9a01c27b4]'"
+```
 
 ## How it works
 
@@ -33,6 +103,8 @@ We gave an agent ten everyday dev tasks, three times each, in a project seeded w
 4. **Scan**. Lists every secret your past sessions already sent, and how to rotate it.
 
 No value is ever printed, in a denial, a report or a log. A finding is a kind and a fingerprint, the first 8 hex of the value's SHA-256.
+
+## Skills
 
 | Skill | Use it when | You get back | skills.sh |
 | --- | --- | --- | --- |
@@ -78,7 +150,7 @@ If your Claude Code runs inside an app that keeps its own profile (Orca does), t
 
 </details>
 
-## Using them
+## Usage
 
 Ask your agent in plain words:
 
@@ -97,6 +169,20 @@ Set up the no-leaky hooks
 | "find this customer's orders", "why does this user's checkout fail", output holding `[email: k…]` | `no-leaky-data` |
 
 The hooks do not depend on the model choosing a skill. Once installed, they run on every Bash, Read and Grep call and on every prompt you send.
+
+## Update
+
+```sh
+npx skills update
+```
+
+The hooks run the scripts inside the installed skill folder, so updating the skills updates the hooks too. A running session keeps the old hooks, so start a new one, then confirm they are in place:
+
+```sh
+python3 ~/.claude/skills/no-leaky-secrets/scripts/install.py --check
+```
+
+What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Measured
 
@@ -146,20 +232,6 @@ against 0 of 15, 15 of 15 right).
 
 </details>
 
-## From "may my agent read .env?" to proof
-
-Asked whether their coding agent may read `.env`, about 60 developers in November 2026 split down the middle. Half said no. The other half said yes, as long as production values are different. Almost nobody named anything that makes either answer true.
-
-| What people rely on | Why it fails | What no-leaky does |
-| --- | --- | --- |
-| "I told it not to read it" | A rule in the prompt is a request. Agents `cat .env` while debugging something else. | The guard denies the read before it runs. |
-| "Are you sure it never did?" | Nobody is, without reading the tool calls. | The scan reads past transcripts and lists every secret that went through, by fingerprint. |
-| "Prod values are different" | Until one prod key gets copied into a local file to reproduce a bug. | Every value in an `.env` file on this machine is known by hash, so that key is caught wherever it turns up later. |
-| "The app sources the env, the agent never sees it" | Until a stack trace prints the config. | The filter redacts secrets in Bash, Read, Grep and MCP output. |
-| "We use a secret manager" | An agent that can run `infisical run -- env` holds the secret too. | The guard denies env dumps: `printenv`, `env`, `export -p`, `/proc/*/environ`. |
-| "I tell it to forget afterwards" | Forgetting is a chat feature. The provider already has the value. | Stop it before the model. For what already went through, the scan says what to rotate. |
-| "It only reads, it never commits" | `git add .env` puts it in history, which outlives the file. | The guard denies staging credential files. |
-
 ## The rules
 
 Every part here follows the same four.
@@ -180,7 +252,7 @@ Every part here follows the same four.
 | `filter.py` | PostToolUse on Bash, Read, Grep and MCP tools | Replaces any secret that still got through with `[secret: <kind>, fp <8 hex>]` and leaves the rest of the output alone. |
 | `prompt_guard.py` | UserPromptSubmit | Holds back a message you typed that carries a secret. Start it with `secret-ok:` to send it anyway. |
 
-What the guard still allows: `set -a; . ./.env; set +a; npm start`, `curl -H "Authorization: Bearer $(cat ~/.token)"`, `jq --rawfile`, a pipe into `ssh`, a redirect to a file, `wc`, `shasum`, `cmp`, `grep -c`, `pgrep -f`, `git add .env.example`. Its self-check holds 38 commands it must deny and 39 it must allow.
+What the guard still allows: `set -a; . ./.env; set +a; npm start`, `curl -H "Authorization: Bearer $(cat ~/.token)"`, `jq --rawfile`, a pipe into `ssh`, a redirect to a file, `wc`, `shasum`, `cmp`, `grep -c`, `pgrep -f`, `git add .env.example`. Its self-check holds 41 commands it must deny and 40 it must allow.
 
 The filter caught keys the redaction layer in front of it missed. Seven fake vendor keys in one Bash output went through a token optimizer's post-hook first: it redacted 3 and passed 4 on raw. Chained behind it with `--after`, `filter.py` redacted the other 4, so 7 of 7 left as fingerprints. One run on one output, reported upstream.
 
@@ -258,6 +330,43 @@ Measured on Claude Code 2.1.322:
 
 Every script has a self-check: `python3 <script> --test`.
 
-## Licence
+## FAQ
 
-MIT
+Asked whether their coding agent may read `.env`, about 60 developers in November 2026 split down the middle. Half said no. The other half said yes, as long as production values are different. Almost nobody named anything that makes either answer true. These are the answers they gave, and what each one misses.
+
+**I told it not to read `.env`. Is that enough?**
+No. A rule in the prompt is a request, and agents `cat .env` while debugging something else. The guard denies the read before it runs.
+
+**`.env` is in `.gitignore`. Doesn't that cover it?**
+`.gitignore` keeps the file out of git. The agent reads files from disk whether git tracks them or not. The guard is what stops `cat .env`.
+
+**How would I know it never read one?**
+Nobody does, without reading the tool calls. The scan reads past transcripts and lists every secret that went through, by fingerprint.
+
+**My production values are different. Why care about the local ones?**
+Until one prod key gets copied into a local file to reproduce a bug. Every value in an `.env` file on this machine is known by hash, so that key is caught wherever it turns up later.
+
+**The app sources the env. Does the agent ever see it?**
+Yes, the day a stack trace prints the config. The filter redacts secrets in Bash, Read, Grep and MCP output.
+
+**We use a secret manager. Are we covered?**
+An agent that can run `infisical run -- env` holds the secret too. The guard denies env dumps: `printenv`, `env`, `export -p`, `/proc/*/environ`.
+
+**Can I tell it to forget afterwards?**
+Forgetting is a chat feature. The provider already has the value. Stop it before the model, and for what already went through, the scan says what to rotate.
+
+**It only reads, it never commits. Why the git rule?**
+`git add .env` puts the file in history, which outlives the file. The guard denies staging credential files.
+
+**Which agents does it work with?**
+The hooks run on Claude Code. The scan reads Claude Code and Codex transcripts, reads Gemini CLI as plain text, and does not read Cursor.
+
+<hr>
+
+<p align="center"><em>Use it, do not show it.</em></p>
+
+<hr>
+
+## License
+
+MIT: [LICENSE](LICENSE)
