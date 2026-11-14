@@ -58,6 +58,7 @@ FIXTURE = re.compile(r"^(?:tests?|testdata|spec|fixtures?|examples?|samples?|moc
                      r"|\.(?:example|sample|template|dist)(?:\.[\w-]+)?$", re.I)
 DOTTED = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$")
 WORDS = re.compile(r"^[A-Za-z_]+$")
+MODEL_NAME = re.compile(r"(?:^|_)MODEL(?:_ID|_NAME)?$", re.I)  # OPENAI_MODEL=gpt-...: a model name, not a credential
 EMAIL_VALUE = re.compile(r"^[\w.%+-]+@[\w-]+(?:\.[\w-]+)+$")  # an address is data, not a credential
 
 
@@ -120,7 +121,7 @@ def _name_before(text, start):
 
 CONFIG_PATH = os.path.expanduser("~/.config/no-leaky/config.json")
 CACHE_PATH = os.path.expanduser("~/.cache/no-leaky/known.json")
-KNOWN_FORMAT = 3  # bump when _source_values changes, so caches built by older rules are rebuilt
+KNOWN_FORMAT = 4  # bump when _source_values changes, so caches built by older rules are rebuilt
 DEFAULT_CONFIG = {"scan_roots": [], "extra_credential_globs": [], "safe_paths": [], "ignore": [],
                   "internal_names": [], "data_allow": [], "data_hosts": []}
 HOME_SOURCES = [".npmrc", ".aws/credentials", ".config/gh/hosts.yml", ".docker/config.json"]
@@ -187,6 +188,7 @@ def _source_values(path):
         if not val:
             continue
         if (len(val) < 16 or is_placeholder(val) or PUBLIC_NAME.search(name) or val[0] in "/~$"
+                or (MODEL_NAME.search(name) and _weak_name(name))
                 or val.isdigit() or DOTTED.match(val) or WORDS.match(val) or EMAIL_VALUE.match(val)
                 or ("://" in val and not re.search(r"://[^/@\s]+:[^/@\s]+@", val))):
             continue
@@ -537,11 +539,12 @@ def test_known(check):
         os.makedirs(home)
         value, short, example, nested = rand(24), rand(8), rand(24), rand(24)
         email = rand(10).lower() + "@" + rand(8).lower() + ".co.id"
+        model, model_key = "gemini-" + rand(12).lower() + "-preview", rand(24)
         env = os.path.join(root, "app", ".env")
         with open(env, "w") as f:
             f.write(f"MY_VAR={value}\nSHORT={short}\nAPP_URL=https://app.acmecorp.io/path/to\n"
                     f"DB_HOST=db.internal.acmecorp\nNEXT_PUBLIC_KEY={rand(24)}\nexport QUOTED=\"{nested}\"\n"
-                    f"SIGNUP_ALLOWLIST={email}\n")
+                    f"SIGNUP_ALLOWLIST={email}\nOPENAI_MODEL={model}\nMODEL_API_KEY={model_key}\n")
         with open(os.path.join(root, "app", ".env.example"), "w") as f:
             f.write(f"EX_VAR={example}\n")
         with open(os.path.join(root, "node_modules", "x", ".env"), "w") as f:
@@ -566,7 +569,9 @@ def test_known(check):
         check("known: short skipped", hashlib.sha256(short.encode()).hexdigest() not in known)
         check("known: example skipped", hashlib.sha256(example.encode()).hexdigest() not in known)
         check("known: email skipped", hashlib.sha256(email.encode()).hexdigest() not in known)
-        check("known: only real values", len(known) == 3)
+        check("known: model name skipped", hashlib.sha256(model.encode()).hexdigest() not in known)
+        check("known: key under a model name kept", known.get(hashlib.sha256(model_key.encode()).hexdigest()) == "MODEL_API_KEY")
+        check("known: only real values", len(known) == 4)
         with open(cache) as f:
             blob = f.read()
         check("cache: no value", value not in blob and npmrc_value not in blob)

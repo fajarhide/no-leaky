@@ -3,6 +3,13 @@
 All notable changes to no-leaky. Versions follow [Semantic Versioning](https://semver.org/): before 1.0.0, a minor
 version adds features and may change hook behavior, a patch version only fixes.
 
+## [Unreleased]
+
+### Fixed
+- A model name in a `.env` file (`OPENAI_MODEL`, `GEMINI_MODEL`, `*_MODEL_ID`, `*_MODEL_NAME`) is no longer learned as a
+  known secret, so the model name stops coming back as `[secret: known, ...]` wherever it appears. A name that also
+  carries a credential word, such as `MODEL_API_KEY`, is still learned. The known-values cache format moves to 4.
+
 ## [0.2.5] - 2026-11-14
 
 ### Fixed
