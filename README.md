@@ -317,6 +317,7 @@ Measured on Claude Code 2.1.322:
 - The guard keeps process arguments from the agent. It finds a process with `pgrep -f` but cannot see how one was started. Before v0.2.2 the bench's worker task failed 3 of 3 here; the denial now points to `pgrep -f`.
 - Personal data detection covers structured values only. Names of people, street addresses and free text such as medical notes are not detected.
 - Landline numbers written without `+` are not detected.
+- A value that also sits in `.env.example` (or another template beside the `.env`) is treated as a default and not learned. A vendor key there is still caught by its format; a secret with no known format copied into a template is not.
 - A client name inside a path, URL or git remote stays readable, so `cd` and `git` keep working. It still reaches the provider.
 - Edit cannot use a token: Claude Code compares an Edit against the file before any hook runs. The agent edits such a line with `nl-run` and a script.
 - `nl-run` refusing network tools is a speed bump against a prompt-injected agent, not a sandbox. It sees through `env`, `timeout`, `sudo`, `xargs`, `bash -lc`, `/dev/tcp` and DNS lookups, but a script file that opens a connection itself, or a database client pointed at a remote host, still sends resolved values.

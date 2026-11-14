@@ -3,6 +3,14 @@
 All notable changes to no-leaky. Versions follow [Semantic Versioning](https://semver.org/): before 1.0.0, a minor
 version adds features and may change hook behavior, a patch version only fixes.
 
+## [Unreleased]
+
+### Fixed
+- A value in `.env` that the template beside it (`.env.example`, `.env.sample`, `.env.template`, `.env.dist`) also
+  holds is no longer learned as a known secret. A template is written to be shared, so its values are defaults:
+  image references, database names, hosts. A scan had listed two image references from `.env.example` as certain
+  secrets. Editing the template refreshes what is learned. The known-values cache format moves to 5.
+
 ## [0.2.6] - 2026-11-14
 
 ### Fixed

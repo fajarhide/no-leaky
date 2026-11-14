@@ -121,7 +121,7 @@ def _name_before(text, start):
 
 CONFIG_PATH = os.path.expanduser("~/.config/no-leaky/config.json")
 CACHE_PATH = os.path.expanduser("~/.cache/no-leaky/known.json")
-KNOWN_FORMAT = 4  # bump when _source_values changes, so caches built by older rules are rebuilt
+KNOWN_FORMAT = 5  # bump when _source_values changes, so caches built by older rules are rebuilt
 DEFAULT_CONFIG = {"scan_roots": [], "extra_credential_globs": [], "safe_paths": [], "ignore": [],
                   "internal_names": [], "data_allow": [], "data_hosts": []}
 HOME_SOURCES = [".npmrc", ".aws/credentials", ".config/gh/hosts.yml", ".docker/config.json"]
@@ -169,14 +169,16 @@ class Known(dict):
         self.lengths = set()
 
 
-def _source_values(path):
-    """{sha256 hex: [variable name, value length]} for the secret-looking values in one source file."""
-    out = {}
+TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
+
+
+def _pairs(path):
+    """(name, value) for each assignment in an env or config file; nothing when it cannot be read."""
     try:
         with open(path, errors="replace") as f:
             lines = f.read().splitlines()
     except OSError:
-        return out
+        return
     for line in lines:
         line = re.sub(r"^\s*export\s+", "", line).strip()
         seps = [i for i in (line.find("="), line.find(": ")) if i > 0]
@@ -185,9 +187,24 @@ def _source_values(path):
         cut = min(seps)
         name = line[:cut].strip().strip("\"'")
         val = line[cut + 1:].strip().rstrip(",").strip().strip("\"'")
-        if not val:
-            continue
-        if (len(val) < 16 or is_placeholder(val) or PUBLIC_NAME.search(name) or val[0] in "/~$"
+        if val:
+            yield name, val
+
+
+def _templates(path):
+    """The shared templates beside an env file (.env.example and the like)."""
+    d, base = os.path.dirname(path), os.path.basename(path)
+    names = {".env" + s for s in TEMPLATE_SUFFIXES} | {base + s for s in TEMPLATE_SUFFIXES}
+    return sorted(p for p in (os.path.join(d, n) for n in names) if os.path.isfile(p))
+
+
+def _source_values(path):
+    """{sha256 hex: [variable name, value length]} for the secret-looking values in one source file."""
+    out = {}
+    # A value the template also holds was written to be shared, so it is a default, not a secret.
+    shared = {v for t in _templates(path) for _, v in _pairs(t)}
+    for name, val in _pairs(path):
+        if (val in shared or len(val) < 16 or is_placeholder(val) or PUBLIC_NAME.search(name) or val[0] in "/~$"
                 or (MODEL_NAME.search(name) and _weak_name(name))
                 or val.isdigit() or DOTTED.match(val) or WORDS.match(val) or EMAIL_VALUE.match(val)
                 or ("://" in val and not re.search(r"://[^/@\s]+:[^/@\s]+@", val))):
@@ -219,7 +236,7 @@ def load_known(cfg, cache=CACHE_PATH, home=None, max_age=None):
     fresh, changed = {}, False
     for path in known_sources(cfg, home):
         try:
-            mtime = os.stat(path).st_mtime
+            mtime = max(os.stat(p).st_mtime for p in [path] + _templates(path))  # a template edit changes what is learned
         except OSError:
             continue
         entry = stored.get(path)
@@ -540,13 +557,15 @@ def test_known(check):
         value, short, example, nested = rand(24), rand(8), rand(24), rand(24)
         email = rand(10).lower() + "@" + rand(8).lower() + ".co.id"
         model, model_key = "gemini-" + rand(12).lower() + "-preview", rand(24)
+        shared = "ghcr.io/acme/" + rand(10).lower() + ":v2"
         env = os.path.join(root, "app", ".env")
         with open(env, "w") as f:
             f.write(f"MY_VAR={value}\nSHORT={short}\nAPP_URL=https://app.acmecorp.io/path/to\n"
                     f"DB_HOST=db.internal.acmecorp\nNEXT_PUBLIC_KEY={rand(24)}\nexport QUOTED=\"{nested}\"\n"
-                    f"SIGNUP_ALLOWLIST={email}\nOPENAI_MODEL={model}\nMODEL_API_KEY={model_key}\n")
+                    f"SIGNUP_ALLOWLIST={email}\nOPENAI_MODEL={model}\nMODEL_API_KEY={model_key}\n"
+                    f"APP_IMAGE={shared}\n")
         with open(os.path.join(root, "app", ".env.example"), "w") as f:
-            f.write(f"EX_VAR={example}\n")
+            f.write(f"EX_VAR={example}\nAPP_IMAGE={shared}\n")
         with open(os.path.join(root, "node_modules", "x", ".env"), "w") as f:
             f.write(f"DEP_VAR={rand(24)}\n")
         npmrc_value = rand(36)
@@ -571,6 +590,7 @@ def test_known(check):
         check("known: email skipped", hashlib.sha256(email.encode()).hexdigest() not in known)
         check("known: model name skipped", hashlib.sha256(model.encode()).hexdigest() not in known)
         check("known: key under a model name kept", known.get(hashlib.sha256(model_key.encode()).hexdigest()) == "MODEL_API_KEY")
+        check("known: value also in the template skipped", hashlib.sha256(shared.encode()).hexdigest() not in known)
         check("known: only real values", len(known) == 4)
         with open(cache) as f:
             blob = f.read()
