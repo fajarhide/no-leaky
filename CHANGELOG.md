@@ -3,7 +3,7 @@
 All notable changes to no-leaky. Versions follow [Semantic Versioning](https://semver.org/): before 1.0.0, a minor
 version adds features and may change hook behavior, a patch version only fixes.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-15
 
 ### Added
 - IBANs are detected as personal data and turned into `[iban: k...]` tokens. A match must have the length its
@@ -144,6 +144,7 @@ version adds features and may change hook behavior, a patch version only fixes.
 - The guard denies `git add` of a credential file.
 - `install.py --no-wrap` leaves a PostToolUse hook that never rewrites output unwrapped.
 
+[0.3.0]: https://github.com/fajarhide/no-leaky/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/fajarhide/no-leaky/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/fajarhide/no-leaky/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/fajarhide/no-leaky/compare/v0.2.4...v0.2.5
