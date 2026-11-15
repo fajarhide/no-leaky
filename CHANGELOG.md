@@ -3,6 +3,28 @@
 All notable changes to no-leaky. Versions follow [Semantic Versioning](https://semver.org/): before 1.0.0, a minor
 version adds features and may change hook behavior, a patch version only fixes.
 
+## [Unreleased]
+
+### Added
+- IBANs are detected as personal data and turned into `[iban: k...]` tokens. A match must have the length its
+  country code requires and pass the mod-97 check, so a random uppercase ID passes about 1 time in 97 after the
+  length check. Spaced and compact spellings get the same token.
+- `tests/bypass_corpus.txt`: 86 commands an agent could use to get a credential past the guard, each marked `deny`
+  or `gap`, run by `tests/test_bypass.py` in CI. 10 are known gaps: a copy or link under a new name, a path or
+  reader built at run time, archive tools, and a script that opens the file itself.
+- `SECURITY.md`: where to send a bypass (in public) and a leak in no-leaky itself (in private).
+
+### Fixed
+- The guard now denies a reader called by path (`/bin/cat`), `hexdump`, `iconv`, `fold`, `pr`, `expand`, `diff`,
+  `dd if=`, `xargs -a` and `perl` on a credential file, a redirect to `/dev/stdout` or `/dev/stderr`, a glob that
+  expands to `.env` (`.e*v`, `.en?`), `curl file://`, `git log -p` of a credential file, `echo` of a variable named
+  like a secret (`$DB_PASSWORD`, `$GITHUB_TOKEN`), and inline interpreter code (`python3 -c`, `node -e`, `ruby -e`)
+  that names a credential file or prints the whole environment. 34 of the 86 corpus commands got through before this, 10 do now.
+
+### Changed
+- README: a "What it covers" table, a two line threat model under the opening paragraph, the FAQ as a list, the
+  survey named as a Threads poll, and a customer data demo without the Indonesian ID column.
+
 ## [0.2.7] - 2026-11-14
 
 ### Fixed

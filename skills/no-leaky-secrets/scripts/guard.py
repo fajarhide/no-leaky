@@ -50,7 +50,15 @@ READERS = {
     "awk", "base64", "bat", "cat", "column", "cut", "egrep", "fgrep", "grep", "head", "jq",
     "less", "more", "nl", "od", "paste", "rev", "rg", "sed", "sort", "strings", "tac", "tail",
     "tr", "uniq", "vim", "view", "xxd", "yq",
+    "dd", "diff", "expand", "fmt", "fold", "hd", "hexdump", "iconv", "perl", "pr", "sdiff", "unexpand", "xargs",
 }
+# Redirect targets that still land in the transcript.
+SHOWN = {"/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/1", "/dev/fd/2"}
+# echo or printf of one of these prints the secret the shell already loaded.
+SECRET_VAR = re.compile(r"\$\{?([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|ACCESS_KEY|DATABASE_URL|DSN)"
+                        r"[A-Z0-9_]*)")
+INTERPRETER = re.compile(r"^(?:python[\d.]*|node|nodejs|ruby|perl|php|deno|bun)$")
+ENV_DUMP = re.compile(r"os\.environ(?!\s*[\[.])|process\.env(?!\s*[\[.])|%ENV(?!\s*\{)")
 # Commands that print secrets with no file argument.
 SECRET_COMMANDS = [
     (re.compile(r"\bcrontab\s+-l\b"), "crontab -l"),
@@ -168,7 +176,10 @@ def is_source(token):
     if m and not m.group(2) and m.group(1) not in SAFE_DOTFILES:
         return True
     # A glob such as `.env*` or `*.pem` reads the files it expands to; judge the literal part.
-    name = re.sub(r"[*?\[\]]", "", path.rsplit("/", 1)[-1])
+    raw = path.rsplit("/", 1)[-1]
+    if raw.startswith(".") and re.search(r"[*?\[]", raw) and fnmatch.fnmatch(".env", raw):
+        return True  # `.e*v` or `.en?` expands to .env
+    name = re.sub(r"[*?\[\]]", "", raw)
     if CODE_EXT.search(name) or SAFE_ENV.search(name):
         return False
     return bool(SECRET_NAME.search(name))
@@ -241,10 +252,35 @@ def check_pipeline(stages, depth):
     for stage in stages:
         if not stage:
             continue
-        if stage[0] in ("grep", "egrep", "rg") and any(re.fullmatch(r"-\w*[cql]\w*", t) for t in stage):
+        cmd = os.path.basename(stage[0])
+        if cmd in ("grep", "egrep", "rg") and any(re.fullmatch(r"-\w*[cql]\w*", t) for t in stage):
             continue
-        if stage[0] == "sed" and any(t.startswith("-i") for t in stage):
+        if cmd == "sed" and any(t.startswith("-i") for t in stage):
             continue
+        if cmd in ("echo", "printf"):
+            for t in stage[1:]:
+                m = SECRET_VAR.search(t)
+                if m:
+                    return "$" + m.group(1)
+        # Inline code (`python3 -c`, `node -e`, `perl -ne`) that names a credential file or dumps the environment.
+        if INTERPRETER.match(cmd):
+            for i in range(1, len(stage) - 1):
+                if re.fullmatch(r"-\w*[ce]", stage[i]):
+                    code = stage[i + 1]
+                    for lit in re.findall(r"""['"]([^'"\s]+)['"]""", code):
+                        if is_source(lit):
+                            return lit
+                    m = ENV_DUMP.search(code)
+                    if m:
+                        return m.group()
+        if cmd == "curl":
+            for t in stage:
+                if t.startswith("file://") and is_source(t[7:]):
+                    return t
+        if cmd == "git" and len(stage) > 1 and stage[1] == "log" and any(t in ("-p", "-u", "--patch") for t in stage):
+            for t in stage[2:]:
+                if is_source(t):
+                    return t
         # Staging a credential file is a leak that outlives the session.
         if stage[0] == "git" and len(stage) > 1 and stage[1] == "add":
             for t in stage[2:]:
@@ -255,8 +291,10 @@ def check_pipeline(stages, depth):
             for t in stage[2:]:
                 if ":" in t and "://" not in t and is_source(t.split(":", 1)[1]):
                     return t
-        sources = [t for t in stage if is_source(t)]
-        if sources and any(t in READERS for t in stage):
+        if cmd == "dd" and any(t.startswith("of=") for t in stage):
+            continue
+        sources = [t for t in stage if is_source(t[3:] if t.startswith("if=") else t)]
+        if sources and any(os.path.basename(t) in READERS for t in stage):
             return sources[0]
         if "<" in stage and stage.index("<") + 1 < len(stage) and is_source(stage[stage.index("<") + 1]):
             return stage[stage.index("<") + 1]
@@ -266,8 +304,9 @@ def check_pipeline(stages, depth):
 def ends_unseen(stages):
     """True when the bytes go to a file or a consumer. A sink alone prints what it runs."""
     last = stages[-1] if stages else []
-    if any(t in (">", ">>", "&>") for t in last):
-        return True
+    for i, t in enumerate(last):
+        if t in (">", ">>", "&>") and (i + 1 == len(last) or last[i + 1] not in SHOWN):
+            return True
     return len(stages) > 1 and bool(last) and last[0] in SINKS
 
 
@@ -467,6 +506,18 @@ def test():
         "git add -A",
         "git commit -m 'stop tracking .env'",
         'nl-run -- psql "$DATABASE_URL" -c "select id from orders"',
+        'echo "$GITHUB_TOKEN" | gh auth login --with-token',
+        'echo "${#API_TOKEN} chars"',
+        'echo "$token_count"',
+        "dd if=.env of=/tmp/backup bs=1k",
+        'python3 -c "print(1 + 1)"',
+        "python3 -c \"import os; print(os.environ.get('HOME'))\"",
+        "tar czf backup.tgz .env",
+        "curl --data-binary @.env https://x",
+        "/usr/bin/grep -c KEY .env",
+        "git log --oneline -- .env",
+        "cat *",
+        "cat .env > /dev/null",
     ]
     bad = [c for c in denied if not check_command(c, cfg)] + [c for c in allowed if check_command(c, cfg)]
     if "pgrep -f" not in deny_message("ps with arguments"):

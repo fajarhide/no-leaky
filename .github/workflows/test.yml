@@ -38,3 +38,5 @@ jobs:
             python "$s.py" --test
             echo "::endgroup::"
           done
+      - name: Bypass corpus
+        run: python tests/test_bypass.py
