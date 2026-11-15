@@ -53,7 +53,7 @@ PUBLIC_NAME = re.compile(
     r"^(?:PUBLIC_|NEXT_PUBLIC_|VITE_|EXPO_PUBLIC_)|(?:^|_)(?:PUBLISHABLE|ANON|VAPID_PUBLIC|CLIENT_?ID)(?:_|$)", re.I)
 # A public-looking name never makes a secret-only key format public (a real key in VITE_ is a leak).
 PUBLIC_BY_NAME = {"google", "jwt", "assignment", "known"}
-PLACEHOLDER = re.compile(r"changeme|example|placeholder|dummy|your_|your-|xxxx|<|>|\$\{", re.I)
+PLACEHOLDER = re.compile(r"changeme|example|placeholder|dummy|your_|your-|x{6,}|<|>|\$\{", re.I)  # x{6,}: a real key can contain xxxx by chance
 FIXTURE = re.compile(r"^(?:tests?|testdata|spec|fixtures?|examples?|samples?|mocks?|__mocks__|__fixtures__)$"
                      r"|\.(?:example|sample|template|dist)(?:\.[\w-]+)?$", re.I)
 DOTTED = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$")
@@ -505,6 +505,10 @@ def test():
     check("placeholder changeme", is_placeholder("changeme-now-please-1234"))
     check("placeholder repeated", is_placeholder("a" * 30))
     check("not placeholder", not is_placeholder(rand(24)))
+    stripe = fake("stripe")
+    check("not placeholder, key with xxxx inside", not is_placeholder(stripe[:12] + "XXXX" + stripe[16:]))
+    check("placeholder, run of x", is_placeholder(stripe[:8] + "x" * 24))
+    check("key with xxxx inside still found", [f.kind for f in find(stripe[:12] + "XxXx" + stripe[16:])] == ["stripe"])
     check("fixture path", is_fixture_path("/repo/tests/fixtures/keys.txt"))
     check("fixture example env", is_fixture_path("/repo/.env.example"))
     check("not fixture", not is_fixture_path("/repo/app/.env"))
