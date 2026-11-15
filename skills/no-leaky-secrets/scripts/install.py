@@ -682,7 +682,8 @@ def test():
     check("python3 on PATH is preferred", _python(lambda n: "/usr/local/bin/python3", ok_version) == "/usr/local/bin/python3")
     for shim in ("/home/u/.pyenv/shims/python3", "/home/u/.asdf/shims/python3", "/w/app/.venv/bin/python3"):
         check(f"not a shim or venv: {shim}", _python(lambda n, s=shim: s, ok_version) != shim)
-    check("an old python3 is skipped", _python(lambda n: "/usr/bin/python3", lambda exe: False) != "/usr/bin/python3")
+    old = "/opt/old-python/bin/python3"  # never sys.executable, which is the fallback this check expects
+    check("an old python3 is skipped", _python(lambda n: old, lambda exe: False) != old)
     check("no python3 on PATH falls back", bool(_python(lambda n: None, ok_version)))
 
     # v0.2.4: Claude Code's own Read deny rules as a backup layer if a hook is ever missing
