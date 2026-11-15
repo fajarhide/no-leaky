@@ -12,9 +12,13 @@ import re
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import packs  # noqa: E402
+
 VAULT_PATH = os.path.expanduser("~/.cache/no-leaky/vault.json")
 TTL = 7 * 86400
-TOKEN_RE = re.compile(r"\[(?:email|phone|nik|npwp|iban|card|ip|account|name): k[0-9a-f]{12}\]")
+KINDS = ("email", "phone", "nik", "npwp", "card", "ip", "account", "name") + packs.KINDS
+TOKEN_RE = re.compile(r"\[(?:" + "|".join(KINDS) + r"): k[0-9a-f]{12}\]")
 
 
 def _load(path):

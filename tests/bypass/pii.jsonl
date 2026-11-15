@@ -1,5 +1,6 @@
 # Personal data, one example per line. expect: tokenized (detected today), gap (not detected yet), ignored (must stay readable).
 # Every value is synthetic or a published example. A gap that gets a detector turns into FIXED and must be promoted.
+# Identifiers with a bare or common form (SSN, CPF, Aadhaar, BSN, SIN) are read only when a word like "ssn" stands in front: see `context`.
 {"id": "p-email", "country": "any", "kind": "email", "value": "jane.doe@acmecorp.io", "expect": "tokenized"}
 {"id": "p-phone-us", "country": "US", "kind": "phone, + form", "value": "+1 415 555 0132", "expect": "tokenized"}
 {"id": "p-phone-uk", "country": "UK", "kind": "phone, + form", "value": "+44 20 7946 0958", "expect": "tokenized"}
@@ -13,19 +14,31 @@
 {"id": "p-card-amex", "country": "any", "kind": "card", "value": "3782 822463 10005", "expect": "tokenized"}
 {"id": "p-ip-private", "country": "any", "kind": "IPv4", "value": "10.20.30.40", "expect": "tokenized"}
 {"id": "p-aws-account", "country": "any", "kind": "AWS account id", "value": "123456789012", "expect": "tokenized", "context": "arn:aws:iam::{V}:role/deploy"}
-{"id": "g-us-ssn", "country": "US", "kind": "social security number", "value": "123-45-6789", "expect": "gap"}
-{"id": "g-uk-nino", "country": "UK", "kind": "national insurance number", "value": "QQ123456C", "expect": "gap"}
-{"id": "g-in-aadhaar", "country": "IN", "kind": "Aadhaar", "value": "2526 0181 5908", "expect": "gap"}
-{"id": "g-br-cpf", "country": "BR", "kind": "CPF", "value": "529.982.247-25", "expect": "gap"}
-{"id": "g-fr-insee", "country": "FR", "kind": "INSEE number", "value": "1 85 05 78 006 084 91", "expect": "gap"}
-{"id": "g-es-dni", "country": "ES", "kind": "DNI", "value": "12345678Z", "expect": "gap"}
-{"id": "g-nl-bsn", "country": "NL", "kind": "BSN", "value": "111222333", "expect": "gap"}
-{"id": "g-ca-sin", "country": "CA", "kind": "social insurance number", "value": "046 454 286", "expect": "gap"}
-{"id": "g-sg-nric", "country": "SG", "kind": "NRIC", "value": "S1234567D", "expect": "gap"}
-{"id": "g-it-cf", "country": "IT", "kind": "codice fiscale", "value": "RSSMRA85T10A562S", "expect": "gap"}
-{"id": "g-mx-curp", "country": "MX", "kind": "CURP", "value": "HEGG560427MVZRRL04", "expect": "gap"}
-{"id": "g-iban-gb", "country": "EU/UK", "kind": "IBAN", "value": "GB82 WEST 1234 5698 7654 32", "expect": "tokenized"}
-{"id": "g-iban-de", "country": "DE", "kind": "IBAN", "value": "DE89 3704 0044 0532 0130 00", "expect": "tokenized"}
+{"id": "p-us-ssn", "country": "US", "kind": "social security number", "value": "123-45-6789", "expect": "tokenized"}
+{"id": "p-in-aadhaar", "country": "IN", "kind": "Aadhaar", "value": "2526 0181 5908", "expect": "tokenized"}
+{"id": "p-br-cpf", "country": "BR", "kind": "CPF", "value": "529.982.247-25", "expect": "tokenized"}
+{"id": "p-fr-insee", "country": "FR", "kind": "INSEE number", "value": "1 85 05 78 006 084 91", "expect": "tokenized"}
+{"id": "p-es-dni", "country": "ES", "kind": "DNI", "value": "12345678Z", "expect": "tokenized"}
+{"id": "p-sg-nric", "country": "SG", "kind": "NRIC", "value": "S1234567D", "expect": "tokenized"}
+{"id": "p-it-cf", "country": "IT", "kind": "codice fiscale", "value": "RSSMRA85T10A562S", "expect": "tokenized"}
+{"id": "p-mx-curp", "country": "MX", "kind": "CURP", "value": "HEGG560427MVZRRL04", "expect": "tokenized"}
+{"id": "p-iban-gb", "country": "EU/UK", "kind": "IBAN", "value": "GB82 WEST 1234 5698 7654 32", "expect": "tokenized"}
+{"id": "p-iban-de", "country": "DE", "kind": "IBAN", "value": "DE89 3704 0044 0532 0130 00", "expect": "tokenized"}
+{"id": "p-gb-nino", "country": "UK", "kind": "national insurance number", "value": "AB123456C", "expect": "tokenized"}
+{"id": "p-gb-nino-spaced", "country": "UK", "kind": "national insurance number, spaced", "value": "AB 12 34 56 C", "expect": "tokenized"}
+{"id": "p-nl-bsn", "country": "NL", "kind": "BSN, with its word", "value": "111222333", "expect": "tokenized", "context": "bsn: {V}"}
+{"id": "p-ca-sin", "country": "CA", "kind": "social insurance number, with its word", "value": "130 692 544", "expect": "tokenized", "context": "SIN: {V}"}
+{"id": "p-es-nie", "country": "ES", "kind": "NIE", "value": "X1234567L", "expect": "tokenized"}
+{"id": "p-iban-compact", "country": "FR", "kind": "IBAN, no spaces", "value": "FR1420041010050500013M02606", "expect": "tokenized"}
+{"id": "p-iban-next-word", "country": "DE", "kind": "IBAN followed by a capitalised word", "value": "DE89370400440532013000", "expect": "tokenized", "context": "pay {V} TEST now"}
+{"id": "p-us-ssn-bare", "country": "US", "kind": "social security number, bare, with its word", "value": "123456789", "expect": "tokenized", "context": "ssn: {V}"}
+{"id": "p-br-cpf-bare", "country": "BR", "kind": "CPF, bare, with its word", "value": "52998224725", "expect": "tokenized", "context": "CPF {V}"}
+{"id": "p-in-aadhaar-bare", "country": "IN", "kind": "Aadhaar, bare, with its word", "value": "252601815908", "expect": "tokenized", "context": "aadhaar: {V}"}
+{"id": "p-escaped-newline", "country": "UK", "kind": "value at the end of a JSON-escaped line, as in a transcript", "value": "AB 12 34 56 C", "expect": "tokenized", "context": "\"1|{V}\\n\""}
+{"id": "p-escaped-quote", "country": "US", "kind": "value at the end of a JSON string", "value": "123-45-6789", "expect": "tokenized", "context": "{\"ssn\": \"{V}\"}"}
+{"id": "p-de-steuerid", "country": "DE", "kind": "tax ID (Steuer-IdNr)", "value": "36 574 261 809", "expect": "tokenized"}
+{"id": "p-de-steuerid-compact", "country": "DE", "kind": "tax ID, 11 digits, with its word", "value": "36574261809", "expect": "tokenized", "context": "Steuer-ID: {V}"}
+{"id": "p-de-steuerid-triple", "country": "DE", "kind": "tax ID, one digit three times", "value": "11 213 456 783", "expect": "tokenized"}
 {"id": "g-phone-us-local", "country": "US", "kind": "phone, no + form", "value": "(415) 555-0132", "expect": "gap"}
 {"id": "g-phone-uk-local", "country": "UK", "kind": "phone, no + form", "value": "020 7946 0958", "expect": "gap"}
 {"id": "g-ipv6", "country": "any", "kind": "IPv6", "value": "2001:db8:85a3::8a2e:370:7334", "expect": "gap"}
@@ -42,3 +55,26 @@
 {"id": "n-timestamp", "country": "any", "kind": "unix timestamp", "value": "1731666000", "expect": "ignored"}
 {"id": "n-localhost", "country": "any", "kind": "loopback", "value": "127.0.0.1", "expect": "ignored", "context": "listening on {V}:3000"}
 {"id": "n-port-list", "country": "any", "kind": "port range", "value": "3000-3010", "expect": "ignored"}
+{"id": "n-gb-nino-doc", "country": "UK", "kind": "HMRC documentation example", "value": "QQ123456C", "expect": "ignored"}
+{"id": "n-gb-nino-prefix", "country": "UK", "kind": "prefix HMRC never issues", "value": "BG123456A", "expect": "ignored"}
+{"id": "n-ca-sin-doc", "country": "CA", "kind": "documentation example, starts with 0", "value": "046 454 286", "expect": "ignored"}
+{"id": "n-nl-bsn-bare", "country": "NL", "kind": "nine digits with no word in front", "value": "111222333", "expect": "ignored", "context": "order {V} shipped"}
+{"id": "n-us-ssn-bare", "country": "US", "kind": "nine digits with no word in front", "value": "123456789", "expect": "ignored", "context": "order {V} shipped"}
+{"id": "n-us-ssn-area-000", "country": "US", "kind": "area 000 is never issued", "value": "000-12-3456", "expect": "ignored"}
+{"id": "n-us-ssn-area-666", "country": "US", "kind": "area 666 is never issued", "value": "666-12-3456", "expect": "ignored"}
+{"id": "n-us-ssn-area-9xx", "country": "US", "kind": "area 900 and up is never issued", "value": "912-34-5678", "expect": "ignored"}
+{"id": "n-br-cpf-same", "country": "BR", "kind": "all digits the same", "value": "111.111.111-11", "expect": "ignored"}
+{"id": "n-br-cpf-check", "country": "BR", "kind": "wrong check digit", "value": "529.982.247-26", "expect": "ignored"}
+{"id": "n-iban-check", "country": "EU", "kind": "wrong check digits", "value": "GB82 WEST 1234 5698 7654 33", "expect": "ignored"}
+{"id": "n-in-aadhaar-check", "country": "IN", "kind": "wrong check digit", "value": "2526 0181 5909", "expect": "ignored"}
+{"id": "n-es-dni-letter", "country": "ES", "kind": "wrong control letter", "value": "12345678A", "expect": "ignored"}
+{"id": "n-path-ssn", "country": "US", "kind": "a directory named like an SSN", "value": "123-45-6789", "expect": "ignored", "context": "cd /data/{V}/profile"}
+{"id": "n-file-ssn", "country": "US", "kind": "a file named like an SSN", "value": "123-45-6789", "expect": "ignored", "context": "export-{V}.csv written"}
+{"id": "n-ca-sin-rgb", "country": "CA", "kind": "a colour triplet that passes the checksum", "value": "250 235 215", "expect": "ignored", "context": "antique white {V} hex"}
+{"id": "n-es-dni-sci", "country": "ES", "kind": "digits and a letter inside a number in scientific notation", "value": "1.38435736E+12", "expect": "ignored", "context": "Decimal('{V}')"}
+{"id": "n-windows-path", "country": "US", "kind": "a Windows directory named like an SSN", "value": "123-45-6789", "expect": "ignored", "context": "C:\\Users\\{V}\\notes"}
+{"id": "n-de-steuerid-bare", "country": "DE", "kind": "eleven digits with no word in front", "value": "36574261809", "expect": "ignored", "context": "order {V} shipped"}
+{"id": "n-de-steuerid-check", "country": "DE", "kind": "wrong check digit", "value": "36 574 261 890", "expect": "ignored"}
+{"id": "n-de-steuerid-two-repeats", "country": "DE", "kind": "two digits repeated, which the structure forbids", "value": "36 554 266 806", "expect": "ignored"}
+{"id": "n-de-steuerid-no-repeat", "country": "DE", "kind": "no repeated digit, with a correct check digit", "value": "12 345 678 903", "expect": "ignored"}
+{"id": "n-de-steuerid-zero", "country": "DE", "kind": "leading zero, with its word and a correct check digit", "value": "01234567888", "expect": "ignored", "context": "Steuer-ID: {V}"}

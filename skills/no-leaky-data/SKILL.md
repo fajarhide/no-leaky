@@ -46,8 +46,9 @@ The user pasted data. Suggest they put the rows in a file and give you the path:
 {
   "data_allow": ["their-own@email.example"],
   "internal_names": ["client or employer names to hide"],
-  "data_hosts": ["db.internal.example"]
+  "data_hosts": ["db.internal.example"],
+  "data_packs": ["us", "gb", "iban"]
 }
 ```
 
-`data_allow` keeps their own email and name readable. `internal_names` turns those names into `[name: k…]` tokens in text (paths, URLs and git remotes are left alone so `cd` and `git` keep working). `data_hosts` lists hosts `nl-run` may send resolved values to.
+`data_allow` keeps their own email and name readable. `internal_names` turns those names into `[name: k…]` tokens in text (paths, URLs and git remotes are left alone so `cd` and `git` keep working). `data_hosts` lists hosts `nl-run` may send resolved values to. `data_packs` limits which national identifiers are tokenized (country codes or `iban`); leave it out for all of them, `[]` for none.

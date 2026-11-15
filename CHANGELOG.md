@@ -15,6 +15,13 @@ version adds features and may change hook behavior, a patch version only fixes.
   in the case, and the run fails when a gap closes so the label stays honest. `--layers` lists the commands only
   the filter caught. A "Bypass report" issue template goes with it.
 - `SECURITY.md`: where to send a bypass (in public) and a leak in no-leaky itself (in private).
+- Country packs (`packs.py`), contributed from an outside review: national identifiers for the United States, the
+  United Kingdom, India, Brazil, Germany, Spain, France, Italy, the Netherlands, Canada, Singapore and Mexico, each
+  kept only when it passes its own checksum or structure rule. IBAN moves into a pack and now covers all 89 countries
+  of SWIFT registry release 101. `data_packs` in the config picks packs by country. Plain forms that look like other
+  numbers need a word such as `ssn` in front. On 1.1 GB of real transcripts the packs fired twice.
+- `CONTRIBUTING.md` walks through adding a pack, using the German tax ID as the example, and a "Country pack
+  request" issue template asks for what a pack needs.
 
 ### Fixed
 - The guard now denies a reader called by path (`/bin/cat`), `hexdump`, `iconv`, `fold`, `pr`, `expand`, `diff`,

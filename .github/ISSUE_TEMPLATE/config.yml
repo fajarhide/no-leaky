@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a flaw that exposes real secrets
+    url: https://github.com/fajarhide/no-leaky/security/advisories/new
+    about: Use private reporting for anything that exposes real secrets or the vault. A bypass that uses fake values belongs in a public bypass report.

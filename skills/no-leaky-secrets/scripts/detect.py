@@ -123,7 +123,7 @@ CONFIG_PATH = os.path.expanduser("~/.config/no-leaky/config.json")
 CACHE_PATH = os.path.expanduser("~/.cache/no-leaky/known.json")
 KNOWN_FORMAT = 5  # bump when _source_values changes, so caches built by older rules are rebuilt
 DEFAULT_CONFIG = {"scan_roots": [], "extra_credential_globs": [], "safe_paths": [], "ignore": [],
-                  "internal_names": [], "data_allow": [], "data_hosts": []}
+                  "internal_names": [], "data_allow": [], "data_hosts": [], "data_packs": None}
 HOME_SOURCES = [".npmrc", ".aws/credentials", ".config/gh/hosts.yml", ".docker/config.json"]
 SKIP_DIRS = {"node_modules", ".git", "vendor", ".venv", "venv", "__pycache__"}
 TOKEN = re.compile(r"[A-Za-z0-9_\-./+=:@!#$%^&*~]{16,}")
