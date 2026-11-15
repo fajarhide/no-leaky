@@ -289,7 +289,8 @@ def main(argv, cfg=None, home=None, config_dir=None, key=None):
     ap.add_argument("--agent", default="all")
     ap.add_argument("--since")
     ap.add_argument("--session")
-    ap.add_argument("--report", default="no-leaky-report.md")
+    # Outside the working directory, so a report never lands in a repo and gets committed.
+    ap.add_argument("--report", default=os.path.expanduser("~/.cache/no-leaky/no-leaky-report.md"))
     ap.add_argument("--source-dir", action="append", default=[])
     try:
         args = ap.parse_args(argv)
@@ -307,6 +308,7 @@ def main(argv, cfg=None, home=None, config_dir=None, key=None):
     res = run_scan(args.agent, args.since, args.session, cfg, home, config_dir, key)
     text = render(res)
     sys.stdout.write(text)
+    os.makedirs(os.path.dirname(os.path.abspath(args.report)), exist_ok=True)
     with open(args.report, "w") as f:
         f.write(text)
     print(f"\nreport: {args.report}")
