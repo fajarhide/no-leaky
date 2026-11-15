@@ -23,7 +23,19 @@
 
 Everything your coding agent sees goes to its provider: every command's output, every file it reads, every grep result. Telling it not to read `.env` does not stop it. Agents still run `cat .env` to check one setting, `docker inspect` on a broken container, or `ps aux` to find a process. **no-leaky** stops the next leak and finds the ones already there, for secrets and for your customers' personal data, while you keep working the way you do now. It runs on Claude Code, and the scan also reads Codex transcripts.
 
+It stops accidental leaks by an agent that works for you. An agent trying to get a secret out on purpose can get past it, for example with a script that opens the file itself. [Limits](#limits) lists every known edge.
+
 <p align="center"><img src="assets/poster.png" width="840" alt="A .env file whose values are blacked out, dripping amber onto caution tape that reads CAUGHT BY NO-LEAKY. Beside it: What your agent sees, its provider gets. Your agent just sent your .env to the AI provider. no-leaky stops it before it leaves your machine: blocks the read that would print it, redacts any key that still shows up, finds what already leaked. npx skills add fajarhide/no-leaky -g"></p>
+
+## What it covers
+
+| You are doing | What no-leaky does |
+| --- | --- |
+| Debugging with an agent near `.env`, keys, containers or processes | Denies the command that would print the secret and shows the safe way |
+| Reviewing commits, logs or stack traces | Redacts any key that still shows up in the output |
+| Pasting a token into the chat by mistake | Holds the message back before it is sent |
+| Wondering what already leaked | Scans past transcripts and tells you what to rotate |
+| Letting an agent query customer data | Turns emails, phones, IBANs and national IDs into tokens the agent can still use |
 
 ## Before and after
 
@@ -81,14 +93,14 @@ Reviewing the last commit leaked a key in 3 of 3 runs without no-leaky.
 **Without:**
 
 ```
-$ sqlite3 shop.db "select id, email, phone, nik from users where id = 4411"
-4411|<the customer's email>|<their phone number>|<their national ID>
+$ sqlite3 shop.db "select id, email, phone from users where id = 4411"
+4411|<the customer's email>|<their phone number>
 ```
 
 **With:** each value arrives as a token. The agent can still act on it through `nl-run`, which swaps the value back inside its own process.
 
 ```
-4411|[email: k3f9a01c27b4]|[phone: k0c5d9a2e3f8]|[nik: k5e21b7f04a6]
+4411|[email: k3f9a01c27b4]|[phone: k0c5d9a2e3f8]
 
 $ nl-run -- sqlite3 shop.db "select id, status from orders where email = '[email: k3f9a01c27b4]'"
 ```
@@ -110,7 +122,7 @@ No value is ever printed, in a denial, a report or a log. A finding is a kind an
 | --- | --- | --- | --- |
 | `no-leaky-secrets` | Your agent works anywhere near `.env`, config, keys, containers or processes | A command that would print a secret is denied with the safe way to do the same thing, a secret that still reaches output is redacted, and a secret you paste is held back | [![no-leaky-secrets installs on skills.sh](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fwww.skills.sh%2Ffajarhide%2Fno-leaky%2Fno-leaky-secrets&search=Installs%3C%5C%2F%5Ba-z%5D%2B%3E%5Cs%2A%28%3F%3A%3C%5B%5E%3E%5D%2B%3E%5Cs%2A%29%2A%28%5B0-9.%2CKM%E2%80%93-%5D%2B%29&replace=%241&label=installs)](https://www.skills.sh/fajarhide/no-leaky/no-leaky-secrets) |
 | `no-leaky-scan` | You want to know what already leaked | Every secret in your past transcripts, where it came from, how many sessions, and how to rotate it | [![no-leaky-scan installs on skills.sh](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fwww.skills.sh%2Ffajarhide%2Fno-leaky%2Fno-leaky-scan&search=Installs%3C%5C%2F%5Ba-z%5D%2B%3E%5Cs%2A%28%3F%3A%3C%5B%5E%3E%5D%2B%3E%5Cs%2A%29%2A%28%5B0-9.%2CKM%E2%80%93-%5D%2B%29&replace=%241&label=installs)](https://www.skills.sh/fajarhide/no-leaky/no-leaky-scan) |
-| `no-leaky-data` | Your agent works on customer or user data: database rows, logs, CSV imports, tickets | Emails, phone numbers, national IDs, card numbers, internal IPs and client names arrive as tokens the agent can still use through `nl-run`, never as values | [![no-leaky-data installs on skills.sh](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fwww.skills.sh%2Ffajarhide%2Fno-leaky%2Fno-leaky-data&search=Installs%3C%5C%2F%5Ba-z%5D%2B%3E%5Cs%2A%28%3F%3A%3C%5B%5E%3E%5D%2B%3E%5Cs%2A%29%2A%28%5B0-9.%2CKM%E2%80%93-%5D%2B%29&replace=%241&label=installs)](https://www.skills.sh/fajarhide/no-leaky/no-leaky-data) |
+| `no-leaky-data` | Your agent works on customer or user data: database rows, logs, CSV imports, tickets | Emails, phone numbers, IBANs, national IDs, card numbers, internal IPs and client names arrive as tokens the agent can still use through `nl-run`, never as values | [![no-leaky-data installs on skills.sh](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fwww.skills.sh%2Ffajarhide%2Fno-leaky%2Fno-leaky-data&search=Installs%3C%5C%2F%5Ba-z%5D%2B%3E%5Cs%2A%28%3F%3A%3C%5B%5E%3E%5D%2B%3E%5Cs%2A%29%2A%28%5B0-9.%2CKM%E2%80%93-%5D%2B%29&replace=%241&label=installs)](https://www.skills.sh/fajarhide/no-leaky/no-leaky-data) |
 
 ## Install
 
@@ -291,8 +303,8 @@ Options: `--agent claude|codex|gemini`, `--since YYYY-MM-DD`, `--session FILE`, 
 Secrets are not the only thing an agent sends to its provider. A query, a log line or a CSV import carries your customers' emails and phone numbers too. The same filter turns them into tokens before the model sees them:
 
 ```
-$ sqlite3 shop.db "select id, email, phone, nik from users where id = 4411"
-4411|[email: k3f9a01c27b4]|[phone: k0c5d9a2e3f8]|[nik: k5e21b7f04a6]
+$ sqlite3 shop.db "select id, email, phone from users where id = 4411"
+4411|[email: k3f9a01c27b4]|[phone: k0c5d9a2e3f8]
 ```
 
 The token is an HMAC of the value under a key that never leaves your machine, so the same customer gets the same token everywhere and nobody holding the token can work back to the value. The agent still acts on it through `nl-run`, which swaps the value in inside its own process:
@@ -301,7 +313,7 @@ The token is an HMAC of the value under a key that never leaves your machine, so
 nl-run -- sqlite3 shop.db "select id, status from orders where email = '[email: k3f9a01c27b4]'"
 ```
 
-Detected: emails, phone numbers (`+` international and Indonesian `08`), NIK, NPWP, card numbers (Luhn), IPv4 addresses, AWS account IDs, and the names you list. A pasted prompt holding them is held back like a secret, and the scan reports them in their own section.
+Detected: emails, phone numbers (`+` international and Indonesian `08`), IBANs (country length and mod-97 check), card numbers (Luhn), Indonesian national and tax IDs (NIK, NPWP), IPv4 addresses, AWS account IDs, and the names you list. A pasted prompt holding them is held back like a secret, and the scan reports them in their own section.
 
 `~/.config/no-leaky/config.json` takes `data_allow` (your own email and name, kept readable), `internal_names` (client or employer names to turn into tokens) and `data_hosts` (hosts `nl-run` may send resolved values to; network tools to any other host are refused).
 
@@ -329,38 +341,21 @@ Measured on Claude Code 2.1.322:
 - The scan reads Claude Code and Codex. Gemini CLI is read as plain text. Cursor is not read.
 - A value already in a variable, or a file opened from inside a Python or Ruby script, is not seen by the guard. The filter is the net behind it.
 
-Every script has a self-check: `python3 <script> --test`.
+Every script has a self-check: `python3 <script> --test`. Commands tried against the guard and the filter, including the known ways past them, are in [tests/bypass/](tests/bypass/), and `python3 tests/bypass/run.py` runs them. To report a bypass or a leak in no-leaky itself, see [SECURITY.md](SECURITY.md).
 
 ## FAQ
 
-Asked whether their coding agent may read `.env`, about 60 developers in November 2026 split down the middle. Half said no. The other half said yes, as long as production values are different. Almost nobody named anything that makes either answer true. These are the answers they gave, and what each one misses.
+Asked in a Threads poll in November 2026 whether their coding agent may read `.env`, about 60 developers split down the middle. Half said no. The other half said yes, as long as production values are different. Almost nobody named anything that makes either answer true. These are the answers they gave, and what each one misses.
 
-**I told it not to read `.env`. Is that enough?**
-No. A rule in the prompt is a request, and agents `cat .env` while debugging something else. The guard denies the read before it runs.
-
-**`.env` is in `.gitignore`. Doesn't that cover it?**
-`.gitignore` keeps the file out of git. The agent reads files from disk whether git tracks them or not. The guard is what stops `cat .env`.
-
-**How would I know it never read one?**
-Nobody does, without reading the tool calls. The scan reads past transcripts and lists every secret that went through, by fingerprint.
-
-**My production values are different. Why care about the local ones?**
-Until one prod key gets copied into a local file to reproduce a bug. Every value in an `.env` file on this machine is known by hash, so that key is caught wherever it turns up later.
-
-**The app sources the env. Does the agent ever see it?**
-Yes, the day a stack trace prints the config. The filter redacts secrets in Bash, Read, Grep and MCP output.
-
-**We use a secret manager. Are we covered?**
-An agent that can run `infisical run -- env` holds the secret too. The guard denies env dumps: `printenv`, `env`, `export -p`, `/proc/*/environ`.
-
-**Can I tell it to forget afterwards?**
-Forgetting is a chat feature. The provider already has the value. Stop it before the model, and for what already went through, the scan says what to rotate.
-
-**It only reads, it never commits. Why the git rule?**
-`git add .env` puts the file in history, which outlives the file. The guard denies staging credential files.
-
-**Which agents does it work with?**
-The hooks run on Claude Code. The scan reads Claude Code and Codex transcripts, reads Gemini CLI as plain text, and does not read Cursor.
+- If you told it not to read `.env`: a rule in the prompt is a request, and agents `cat .env` while debugging something else. The guard denies the read before it runs.
+- If `.env` is in `.gitignore`: that keeps the file out of git, but the agent reads files from disk whether git tracks them or not. The guard is what stops `cat .env`.
+- If you want to know whether it ever read one: nobody can tell without reading the tool calls. The scan reads past transcripts and lists every secret that went through, by fingerprint.
+- If your production values are different: until one prod key gets copied into a local file to reproduce a bug. Every value in an `.env` file on this machine is known by hash, so that key is caught wherever it turns up later.
+- If the app sources the env: the agent still sees it the day a stack trace prints the config. The filter redacts secrets in Bash, Read, Grep and MCP output.
+- If you use a secret manager: an agent that can run `infisical run -- env` holds the secret too. The guard denies env dumps: `printenv`, `env`, `export -p`, `/proc/*/environ`.
+- If you plan to tell it to forget afterwards: forgetting is a chat feature, and the provider already has the value. Stop it before the model, and for what already went through, the scan says what to rotate.
+- If it only reads and never commits: `git add .env` puts the file in history, which outlives the file. The guard denies staging credential files.
+- If you use another agent: the hooks run on Claude Code. The scan reads Claude Code and Codex transcripts, reads Gemini CLI as plain text, and does not read Cursor.
 
 <hr>
 

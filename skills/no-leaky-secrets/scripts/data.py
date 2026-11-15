@@ -21,7 +21,7 @@ import detect  # noqa: E402
 
 KEY_PATH = os.path.expanduser("~/.config/no-leaky/data.key")
 DataFinding = namedtuple("DataFinding", "kind start end token")
-PRIORITY = ["email", "account", "npwp", "nik", "card", "phone", "ip", "name"]
+PRIORITY = ["email", "iban", "account", "npwp", "nik", "card", "phone", "ip", "name"]
 
 EMAIL = re.compile(r"(?<![\w.%+-])([A-Za-z0-9._%+-]+)@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.([A-Za-z]{2,24}))(?![\w-])")
 SKIP_TLD = {"local", "internal", "invalid", "test", "example", "localhost", "png", "jpg", "jpeg", "gif", "svg",
@@ -43,6 +43,12 @@ PROVINCES = {11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 31, 32, 33, 34, 35, 36, 51,
              71, 72, 73, 74, 75, 76, 81, 82, 91, 92, 93, 94, 95, 96, 97}
 CARD_PREFIX = re.compile(r"^(?:4|5[1-5]|2(?:22[1-9]|2[3-9]\d|[3-6]\d\d|7[01]\d|720)|3[457]|6011|65)")
 DOC_NETS = ("192.0.2.", "198.51.100.", "203.0.113.")
+IBAN = re.compile(r"(?<![A-Za-z0-9])[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?(?![A-Za-z0-9])")
+IBAN_LEN = {c[:2]: int(c[2:]) for c in (
+    "AD24 AE23 AL28 AT20 AZ28 BA20 BE16 BG22 BH22 BR29 BY28 CH21 CR22 CY28 CZ24 DE22 DK18 DO28 EE20 EG29 ES24 FI18 "
+    "FO18 FR27 GB22 GE22 GI23 GL18 GR27 GT28 HR21 HU28 IE22 IL23 IQ23 IS26 IT27 JO30 KW30 KZ20 LB28 LC32 LI21 LT20 "
+    "LU20 LV21 MC27 MD24 ME22 MK19 MR27 MT31 MU30 NL18 NO15 PK24 PL28 PS29 PT25 QA29 RO24 RS22 SA24 SC31 SE24 SI19 "
+    "SK24 SM27 ST25 SV28 TL23 TN24 TR26 UA29 VA22 VG24 XK20").split()}
 
 
 def _read_key(path):
@@ -85,6 +91,8 @@ def normalize(kind, value):
         return "+" + ("62" + d[1:] if d.startswith("0") else d)
     if kind == "ip":
         return value
+    if kind == "iban":
+        return value.replace(" ", "")
     return re.sub(r"\D", "", value)
 
 
@@ -101,6 +109,14 @@ def _luhn(d):
             n = n * 2 - 9 if n > 4 else n * 2
         total += n
     return total % 10 == 0
+
+
+def _iban(v):
+    """Country length and the ISO 13616 mod-97 check: a random match passes about 1 in 97 times, after the length."""
+    v = v.replace(" ", "")
+    if IBAN_LEN.get(v[:2]) != len(v):
+        return False
+    return int("".join(str(int(c, 36)) for c in v[4:] + v[:4])) % 97 == 1
 
 
 def _nik(d):
@@ -145,6 +161,9 @@ def _candidates(text, cfg):
     has_long = LONG_DIGITS.search(text) is not None
     if "@" in text:
         yield from _emails(text)
+    for m in IBAN.finditer(text):
+        if _iban(m.group()):
+            yield "iban", m.start(), m.end()
     if has_long:
         yield from _numbers(text)
     if "." in text and DOTTED_DIGITS.search(text):
@@ -276,6 +295,10 @@ def fake_data(kind):
         for c in "0123456789":
             if _luhn(body + c):
                 return body + c
+    if kind == "iban":
+        bban = digits(18)
+        check = 98 - int(bban + "131400") % 97  # "DE00" moved to the end, D=13 E=14
+        return f"DE{check:02d}{bban}"
     if kind == "ip":
         return f"10.{r.randint(0, 255)}.{r.randint(0, 255)}.{r.randint(1, 254)}"
     if kind == "account":
@@ -292,13 +315,13 @@ def test():
 
     key = os.urandom(32)
     cfg = dict(detect.DEFAULT_CONFIG, internal_names=["orgx"])
-    tok = re.compile(r"^\[(email|phone|nik|npwp|card|ip|account|name): k[0-9a-f]{12}\]$")
-    v = {k: fake_data(k) for k in ("email", "phone", "nik", "npwp", "card", "ip", "account")}
+    tok = re.compile(r"^\[(email|phone|nik|npwp|iban|card|ip|account|name): k[0-9a-f]{12}\]$")
+    v = {k: fake_data(k) for k in ("email", "phone", "nik", "npwp", "iban", "card", "ip", "account")}
 
-    text = (f"contact {v['email']} or {v['phone']}, nik {v['nik']}, npwp {v['npwp']}, card {v['card']}, "
+    text = (f"contact {v['email']} or {v['phone']}, nik {v['nik']}, npwp {v['npwp']}, iban {v['iban']}, card {v['card']}, "
             f"server {v['ip']} refused, arn:aws:iam::{v['account']}:role/x, by the orgx team")
     new, found, pairs = tokenize(text, cfg, key)
-    check("every kind found", {f.kind for f in found} == {"email", "phone", "nik", "npwp", "card", "ip", "account", "name"})
+    check("every kind found", {f.kind for f in found} == {"email", "phone", "nik", "npwp", "iban", "card", "ip", "account", "name"})
     check("tokens well formed", all(tok.match(f.token) for f in found))
     check("no value left", not any(x in new for x in v.values()) and "orgx" not in new)
     check("pairs map tokens back", all(pairs[f.token] in text for f in found))
@@ -329,6 +352,14 @@ def test():
     grouped = " ".join(c[i:i + 4] for i in range(0, 16, 4))
     fg = find_data(f"paid with {grouped} today", cfg, key)
     check("card spellings agree", fg and fg[0].token == token("card", c, key))
+
+    ib = v["iban"]
+    spaced_iban = " ".join(ib[i:i + 4] for i in range(0, len(ib), 4))
+    fi = find_data(f"wire to {spaced_iban} today", cfg, key)
+    check("iban spellings agree", [f.kind for f in fi] == ["iban"] and fi[0].token == token("iban", ib, key))
+    bad_iban = ib[:2] + f"{(int(ib[2:4]) + 1) % 100:02d}" + ib[4:]
+    for clean in (f"ref {bad_iban}", "build AB12CDEF3456GHIJ7890KL", "SHA256 AB12 CDEF 3456 GHIJ"):
+        check(f"iban left alone: {clean}", find_data(clean, cfg, key) == [])
 
     check("prefilter skips dates", not LONG_DIGITS.search("2026-11-12T10:00:00Z took 12ms"))
     amex = "378282246310005"

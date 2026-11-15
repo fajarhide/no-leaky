@@ -3,6 +3,32 @@
 All notable changes to no-leaky. Versions follow [Semantic Versioning](https://semver.org/): before 1.0.0, a minor
 version adds features and may change hook behavior, a patch version only fixes.
 
+## [Unreleased]
+
+### Added
+- IBANs are detected as personal data and turned into `[iban: k...]` tokens. A match must have the length its
+  country code requires and pass the mod-97 check, so a random uppercase ID passes about 1 time in 97 after the
+  length check. Spaced and compact spellings get the same token.
+- `tests/bypass/`: a bypass corpus run through the real guard and filter in CI, contributed from an outside review.
+  234 command cases, each tried with a vendor key, a value from a local `.env` and an unknown value, plus 139
+  transform checks (base64, hex, split) and 42 personal data cases from many countries. Every known gap is listed
+  in the case, and the run fails when a gap closes so the label stays honest. `--layers` lists the commands only
+  the filter caught. A "Bypass report" issue template goes with it.
+- `SECURITY.md`: where to send a bypass (in public) and a leak in no-leaky itself (in private).
+
+### Fixed
+- The guard now denies a reader called by path (`/bin/cat`), `hexdump`, `iconv`, `fold`, `pr`, `expand`, `diff`,
+  `dd if=`, `xargs -a` and `perl` on a credential file, a redirect to `/dev/stdout` or `/dev/stderr`, a glob that
+  expands to `.env` (`.e*v`, `.en?`), `curl file://`, `git log -p` of a credential file, `echo` of a variable named
+  like a secret (`$DB_PASSWORD`, `$GITHUB_TOKEN`), and inline interpreter code (`python3 -c`, `node -e`, `ruby -e`)
+  that names a credential file or prints the whole environment.
+- A key that contains `xxxx` by chance (about 1 in 25,000 random keys) was taken for a placeholder and passed the
+  filter unredacted. Only a run of six or more `x` counts as a placeholder now. Found by the bypass corpus.
+
+### Changed
+- README: a "What it covers" table, a two line threat model under the opening paragraph, the FAQ as a list, the
+  survey named as a Threads poll, and a customer data demo without the Indonesian ID column.
+
 ## [0.2.7] - 2026-11-14
 
 ### Fixed

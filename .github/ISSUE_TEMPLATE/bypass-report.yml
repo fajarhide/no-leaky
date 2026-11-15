@@ -1,0 +1,50 @@
+name: Bypass report
+description: A command or tool call that gets a secret or personal data to the model despite the hooks
+labels: [bypass]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use fake values only. Do not paste a real key, token or customer record.
+        If the hole exposes real secrets in a way the Limits section does not cover, report it privately instead (see SECURITY.md).
+  - type: textarea
+    id: call
+    attributes:
+      label: The command or tool call
+      description: The exact Bash command, or the Read or Grep call, the agent ran.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: What it printed
+      description: Replace the real value with a fake one of the same shape.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of secret was in the output
+      options:
+        - A key in a vendor format (sk-, ghp_, AKIA and the like)
+        - A value that is also in a local .env file
+        - A value with no recognisable format and not in a local file
+        - Personal data (email, phone, national ID, card)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: no-leaky version, Claude Code version and OS
+      placeholder: "0.2.3, Claude Code 2.1.322, macOS 15"
+    validations:
+      required: true
+  - type: checkboxes
+    id: fake
+    attributes:
+      label: Check before sending
+      options:
+        - label: Every value above is fake.
+          required: true
