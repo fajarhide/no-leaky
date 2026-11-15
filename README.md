@@ -313,9 +313,29 @@ The token is an HMAC of the value under a key that never leaves your machine, so
 nl-run -- sqlite3 shop.db "select id, status from orders where email = '[email: k3f9a01c27b4]'"
 ```
 
-Detected: emails, phone numbers (`+` international and Indonesian `08`), IBANs (country length and mod-97 check), card numbers (Luhn), Indonesian national and tax IDs (NIK, NPWP), IPv4 addresses, AWS account IDs, and the names you list. A pasted prompt holding them is held back like a secret, and the scan reports them in their own section.
+Detected: emails, phone numbers (`+` international and Indonesian `08`), card numbers (Luhn), Indonesian national and tax IDs (NIK, NPWP), IPv4 addresses, AWS account IDs, and the names you list. A pasted prompt holding them is held back like a secret, and the scan reports them in their own section.
 
-`~/.config/no-leaky/config.json` takes `data_allow` (your own email and name, kept readable), `internal_names` (client or employer names to turn into tokens) and `data_hosts` (hosts `nl-run` may send resolved values to; network tools to any other host are refused).
+Other national identifiers come from country packs. Each pack checks the format and the identifier's own checksum, so a random run of digits does not become a token:
+
+| Country | Identifier |
+| --- | --- |
+| United States | social security number |
+| United Kingdom | national insurance number |
+| India | Aadhaar |
+| Brazil | CPF |
+| Germany | tax ID (Steuer-ID) |
+| Spain | DNI and NIE |
+| France | INSEE number |
+| Italy | codice fiscale |
+| Netherlands | BSN |
+| Canada | social insurance number |
+| Singapore | NRIC and FIN |
+| Mexico | CURP |
+| International | IBAN, 89 countries |
+
+A form that is too common to trust on its own (nine plain digits, three groups of three) is read only when a word such as `ssn` or `bsn` stands in front of it. Across 1.1 GB of the author's own Claude Code transcripts the packs fired twice, both on a shell loop over three four-digit numbers. Your country is missing? Open a [country pack request](https://github.com/fajarhide/no-leaky/issues/new?template=country-pack-request.yml), or write the pack with [CONTRIBUTING.md](CONTRIBUTING.md).
+
+`~/.config/no-leaky/config.json` takes `data_allow` (your own email and name, kept readable), `internal_names` (client or employer names to turn into tokens), `data_hosts` (hosts `nl-run` may send resolved values to; network tools to any other host are refused) and `data_packs` (country codes or `iban` to limit the packs, such as `["us", "gb", "iban"]`; `[]` turns them off, leaving it out keeps all).
 
 </details>
 
@@ -327,7 +347,8 @@ Measured on Claude Code 2.1.322:
 - A blocked prompt never reaches the model, but Claude Code still writes one copy into the local transcript.
 - A running session does not pick up new hooks. They take effect in the next one.
 - The guard keeps process arguments from the agent. It finds a process with `pgrep -f` but cannot see how one was started. Before v0.2.2 the bench's worker task failed 3 of 3 here; the denial now points to `pgrep -f`.
-- Personal data detection covers structured values only. Names of people, street addresses and free text such as medical notes are not detected.
+- Personal data detection covers structured values only. Names of people, street addresses, dates of birth, IPv6 addresses and free text such as medical notes are not detected, and national identifiers only for the countries above.
+- A pack's rule is checked against a public reference implementation, not each country's official specification. A wrong rule makes a pack miss values, it does not mark other numbers.
 - Landline numbers written without `+` are not detected.
 - A value that also sits in `.env.example` (or another template beside the `.env`) is treated as a default and not learned. A vendor key there is still caught by its format; a secret with no known format copied into a template is not.
 - A client name inside a path, URL or git remote stays readable, so `cd` and `git` keep working. It still reaches the provider.

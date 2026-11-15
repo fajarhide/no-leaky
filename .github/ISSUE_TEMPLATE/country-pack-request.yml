@@ -1,0 +1,51 @@
+name: Country pack request
+description: Ask for a national identifier to be detected, or offer to write the pack yourself
+labels: [country-pack]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A pack finds one kind of identifier and keeps it only if it passes the identifier's own checksum, so a random run of digits does not become a token. `CONTRIBUTING.md` walks through the German tax ID pack as a model, and the header of `skills/no-leaky-secrets/scripts/packs.py` lists the steps.
+
+        Use synthetic values or examples the issuing authority has published. Do not paste a real person's number.
+  - type: input
+    id: country
+    attributes:
+      label: Country and identifier
+      description: The local name and the English name, and whether it identifies a person or a company.
+      placeholder: "Steuerliche Identifikationsnummer, German tax ID, person"
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples that pass the checksum
+      description: Two or three, written the way people write them, with their usual separators. Add one written without separators if people do that too.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: rule
+    attributes:
+      label: How the number is validated
+      description: The checksum algorithm and a link to a public source (the authority, a standard or a reference implementation). Also list any structure rules, such as prefixes or ranges that are never issued.
+    validations:
+      required: true
+  - type: textarea
+    id: bare
+    attributes:
+      label: Is the bare form common?
+      description: If the number is plain digits that look like many other numbers, name the words people write next to it in the local language ("ssn", "bsn", "cpf"). The pack reads a bare number only when one of those words stands in front.
+  - type: textarea
+    id: lookalikes
+    attributes:
+      label: Things it could be mistaken for
+      description: Order numbers, phone numbers, dates, colour codes, version strings. Anything the pack should leave readable.
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before sending
+      options:
+        - label: Every example above is synthetic or published by the issuing authority.
+          required: true
+        - label: I can write the pack and its test cases, if someone points me to an existing pack to copy.

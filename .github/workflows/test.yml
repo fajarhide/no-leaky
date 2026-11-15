@@ -33,7 +33,7 @@ jobs:
         working-directory: skills/no-leaky-secrets/scripts
         run: |
           set -e
-          for s in detect data vault guard filter prompt_guard nl_run scan install; do
+          for s in detect packs data vault guard filter prompt_guard nl_run scan install; do
             echo "::group::$s"
             python "$s.py" --test
             echo "::endgroup::"
