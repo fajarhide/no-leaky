@@ -1,0 +1,44 @@
+# Personal data, one example per line. expect: tokenized (detected today), gap (not detected yet), ignored (must stay readable).
+# Every value is synthetic or a published example. A gap that gets a detector turns into FIXED and must be promoted.
+{"id": "p-email", "country": "any", "kind": "email", "value": "jane.doe@acmecorp.io", "expect": "tokenized"}
+{"id": "p-phone-us", "country": "US", "kind": "phone, + form", "value": "+1 415 555 0132", "expect": "tokenized"}
+{"id": "p-phone-uk", "country": "UK", "kind": "phone, + form", "value": "+44 20 7946 0958", "expect": "tokenized"}
+{"id": "p-phone-de", "country": "DE", "kind": "phone, + form", "value": "+49 30 12345678", "expect": "tokenized"}
+{"id": "p-phone-br", "country": "BR", "kind": "phone, + form", "value": "+55 11 91234-5678", "expect": "tokenized"}
+{"id": "p-phone-in", "country": "IN", "kind": "phone, + form", "value": "+91 98765 43210", "expect": "tokenized"}
+{"id": "p-phone-id", "country": "ID", "kind": "phone, 08 form", "value": "0812-3456-7890", "expect": "tokenized"}
+{"id": "p-nik", "country": "ID", "kind": "NIK", "value": "6110345707034734", "expect": "tokenized"}
+{"id": "p-npwp", "country": "ID", "kind": "NPWP", "value": "69.173.170.4-223.574", "expect": "tokenized"}
+{"id": "p-card-visa", "country": "any", "kind": "card", "value": "4111 1111 1111 1111", "expect": "tokenized"}
+{"id": "p-card-amex", "country": "any", "kind": "card", "value": "3782 822463 10005", "expect": "tokenized"}
+{"id": "p-ip-private", "country": "any", "kind": "IPv4", "value": "10.20.30.40", "expect": "tokenized"}
+{"id": "p-aws-account", "country": "any", "kind": "AWS account id", "value": "123456789012", "expect": "tokenized", "context": "arn:aws:iam::{V}:role/deploy"}
+{"id": "g-us-ssn", "country": "US", "kind": "social security number", "value": "123-45-6789", "expect": "gap"}
+{"id": "g-uk-nino", "country": "UK", "kind": "national insurance number", "value": "QQ123456C", "expect": "gap"}
+{"id": "g-in-aadhaar", "country": "IN", "kind": "Aadhaar", "value": "2526 0181 5908", "expect": "gap"}
+{"id": "g-br-cpf", "country": "BR", "kind": "CPF", "value": "529.982.247-25", "expect": "gap"}
+{"id": "g-fr-insee", "country": "FR", "kind": "INSEE number", "value": "1 85 05 78 006 084 91", "expect": "gap"}
+{"id": "g-es-dni", "country": "ES", "kind": "DNI", "value": "12345678Z", "expect": "gap"}
+{"id": "g-nl-bsn", "country": "NL", "kind": "BSN", "value": "111222333", "expect": "gap"}
+{"id": "g-ca-sin", "country": "CA", "kind": "social insurance number", "value": "046 454 286", "expect": "gap"}
+{"id": "g-sg-nric", "country": "SG", "kind": "NRIC", "value": "S1234567D", "expect": "gap"}
+{"id": "g-it-cf", "country": "IT", "kind": "codice fiscale", "value": "RSSMRA85T10A562S", "expect": "gap"}
+{"id": "g-mx-curp", "country": "MX", "kind": "CURP", "value": "HEGG560427MVZRRL04", "expect": "gap"}
+{"id": "g-iban-gb", "country": "EU/UK", "kind": "IBAN", "value": "GB82 WEST 1234 5698 7654 32", "expect": "tokenized"}
+{"id": "g-iban-de", "country": "DE", "kind": "IBAN", "value": "DE89 3704 0044 0532 0130 00", "expect": "tokenized"}
+{"id": "g-phone-us-local", "country": "US", "kind": "phone, no + form", "value": "(415) 555-0132", "expect": "gap"}
+{"id": "g-phone-uk-local", "country": "UK", "kind": "phone, no + form", "value": "020 7946 0958", "expect": "gap"}
+{"id": "g-ipv6", "country": "any", "kind": "IPv6", "value": "2001:db8:85a3::8a2e:370:7334", "expect": "gap"}
+{"id": "g-dob", "country": "any", "kind": "date of birth", "value": "1985-05-17", "expect": "gap", "context": "dob: {V}"}
+{"id": "g-address", "country": "any", "kind": "street address", "value": "221B Baker Street, London NW1 6XE", "expect": "gap"}
+{"id": "g-name", "country": "any", "kind": "person name", "value": "Jane Doe", "expect": "gap", "context": "customer: {V}"}
+{"id": "g-email-spelled", "country": "any", "kind": "email written out", "value": "jane dot doe at acmecorp dot io", "expect": "gap"}
+{"id": "n-version", "country": "any", "kind": "version number", "value": "1.2.3", "expect": "ignored", "context": "requires node >= {V}"}
+{"id": "n-date", "country": "any", "kind": "date", "value": "2026-11-15", "expect": "ignored", "context": "released {V}"}
+{"id": "n-example-email", "country": "any", "kind": "documentation address", "value": "user@example.com", "expect": "ignored"}
+{"id": "n-doc-ip", "country": "any", "kind": "documentation IP range", "value": "203.0.113.7", "expect": "ignored"}
+{"id": "n-uuid", "country": "any", "kind": "uuid", "value": "123e4567-e89b-12d3-a456-426614174000", "expect": "ignored"}
+{"id": "n-git-sha", "country": "any", "kind": "git sha", "value": "3d3c42e5aac5ba805825da76410c181273ba90b1", "expect": "ignored"}
+{"id": "n-timestamp", "country": "any", "kind": "unix timestamp", "value": "1731666000", "expect": "ignored"}
+{"id": "n-localhost", "country": "any", "kind": "loopback", "value": "127.0.0.1", "expect": "ignored", "context": "listening on {V}:3000"}
+{"id": "n-port-list", "country": "any", "kind": "port range", "value": "3000-3010", "expect": "ignored"}

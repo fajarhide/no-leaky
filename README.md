@@ -341,7 +341,7 @@ Measured on Claude Code 2.1.322:
 - The scan reads Claude Code and Codex. Gemini CLI is read as plain text. Cursor is not read.
 - A value already in a variable, or a file opened from inside a Python or Ruby script, is not seen by the guard. The filter is the net behind it.
 
-Every script has a self-check: `python3 <script> --test`. Commands tried against the guard, including the known ways past it, are in [tests/bypass_corpus.txt](tests/bypass_corpus.txt), and `python3 tests/test_bypass.py` runs them. To report a bypass or a leak in no-leaky itself, see [SECURITY.md](SECURITY.md).
+Every script has a self-check: `python3 <script> --test`. Commands tried against the guard and the filter, including the known ways past them, are in [tests/bypass/](tests/bypass/), and `python3 tests/bypass/run.py` runs them. To report a bypass or a leak in no-leaky itself, see [SECURITY.md](SECURITY.md).
 
 ## FAQ
 

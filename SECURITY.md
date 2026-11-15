@@ -4,9 +4,9 @@ no-leaky stops accidental leaks by a coding agent that works for you. It reads c
 
 ## A way past the guard
 
-A command that gets a credential into the transcript without being denied. These exist, and the known ones are listed in [tests/bypass_corpus.txt](tests/bypass_corpus.txt).
+A command that gets a credential into the transcript without being denied. These exist, and the known ones are listed in [tests/bypass/](tests/bypass/).
 
-Report one in public: open a pull request that adds the command to that file as `gap`, or open an issue. Use a fake value, never a real one. A fix moves the line from `gap` to `deny`, and the test keeps it there.
+Report one in public: open a pull request that adds a case to `tests/bypass/commands.jsonl` with the kinds that leak in `leaks`, or open a **Bypass report** issue. Use a fake value, never a real one. A fix removes the kind from `leaks`, and the run keeps it there.
 
 ## A leak in no-leaky itself
 
