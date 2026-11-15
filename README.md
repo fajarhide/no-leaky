@@ -293,7 +293,7 @@ On the author's machine, 787 Claude Code and 34 Codex transcripts took 112 secon
 
 Exit code 1 means a real finding that is not ignored, so the scan can gate a backup or a share. Add a rotated key to `~/.config/no-leaky/config.json` under `ignore` with a reason and a date.
 
-Options: `--agent claude|codex|gemini`, `--since YYYY-MM-DD`, `--session FILE`, `--report PATH`, `--source-dir DIR`.
+Options: `--agent claude|codex|gemini`, `--since YYYY-MM-DD`, `--session FILE`, `--report PATH` (default `~/.cache/no-leaky/no-leaky-report.md`, outside the project), `--source-dir DIR`.
 
 </details>
 

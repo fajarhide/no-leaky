@@ -5,7 +5,7 @@ description: "Use when output shows tokens like [email: k3f9a01c27b4], when work
 
 # no-leaky-data
 
-Everything you see is sent to your provider. Personal data in tool output (emails, phone numbers, IBANs, NIK, NPWP, card numbers, IP addresses, AWS account IDs, and the client names the user listed) reaches you as tokens:
+Everything you see is sent to your provider. Personal data in tool output (emails, phone numbers, card numbers, IP addresses, AWS account IDs, IBANs, national IDs such as `nik`, `npwp`, `ssn`, `nino`, `aadhaar`, `cpf`, `steuerid`, `dni`, `insee`, `cf`, `bsn`, `sin`, `nric` and `curp`, and the client names the user listed) reaches you as tokens. Every token has the shape `[<kind>: k<12 hex>]` and works the same way, whatever its kind:
 
 ```
 customer 4411 <[email: k3f9a01c27b4]> paid with [card: k77b2e10c9d1], phone [phone: k0c5d9a2e3f8]

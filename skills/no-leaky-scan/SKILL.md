@@ -7,7 +7,7 @@ disable-model-invocation: true
 # /no-leaky-scan
 
 1. Find the scan script: `scripts/scan.py` inside the `no-leaky-secrets` skill folder.
-2. Run `python3 <that path> --report no-leaky-report.md`. Add `--since YYYY-MM-DD` if the user named a date. It takes one to two minutes on a few GB of transcripts.
+2. Run `python3 <that path>`. The report is written to `~/.cache/no-leaky/no-leaky-report.md`, outside the project, so it cannot be committed by accident. Add `--since YYYY-MM-DD` if the user named a date. It takes one to two minutes on a few GB of transcripts.
 3. The output never holds a value. Do not try to look one up: no grep of the transcripts for a fingerprint's value, no reading of the source file.
 4. Walk the user through the report from the top:
    - **Certain**: say how many, then each row: what it is, where it came from, how many sessions, the fix. Group rows that share a provider.

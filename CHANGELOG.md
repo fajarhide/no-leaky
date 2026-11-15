@@ -3,6 +3,14 @@
 All notable changes to no-leaky. Versions follow [Semantic Versioning](https://semver.org/): before 1.0.0, a minor
 version adds features and may change hook behavior, a patch version only fixes.
 
+## [Unreleased]
+
+### Changed
+- The scan writes its report to `~/.cache/no-leaky/no-leaky-report.md` by default instead of the working directory,
+  so a report run inside a project can no longer be committed by accident. `--report` still picks another path.
+- The `no-leaky-data` skill lists every token kind the 0.3.0 country packs add (`ssn`, `cpf`, `steuerid` and the
+  rest), so the agent treats them as personal data it can still use through `nl-run`.
+
 ## [0.3.0] - 2026-11-15
 
 ### Added
